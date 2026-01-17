@@ -1,0 +1,10 @@
+# Ignore everything under data
+/data/**
+
+# But do not ignore directories under data (so exceptions can apply)
+!/data/**/
+
+# Keep these files
+!/data/**/.gitkeep
+!/data/**/README.md
+
