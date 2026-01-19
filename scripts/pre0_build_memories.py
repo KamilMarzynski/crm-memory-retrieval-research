@@ -309,4 +309,4 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         raise SystemExit("Usage: pre0_build_memories.py data/raw/review_batch_001.json")
 
-    build_memories(sys.argv)
+    build_memories(sys.argv[1])
