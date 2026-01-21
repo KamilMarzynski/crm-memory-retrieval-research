@@ -1,6 +1,10 @@
-# Raw Data Directory
+# Review Data Directory
 
-Contains code review data collected from repositories. Files are gitignored (sensitive).
+Contains raw code review data collected from repositories. Files are gitignored (sensitive).
+
+## How to Add Data
+
+Place JSON files here manually. These are collected from code review tools/processes.
 
 ## File Naming Convention
 
