@@ -70,7 +70,7 @@ def _call_openrouter(
     r = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=timeout_s)
     r.raise_for_status()
     data = r.json()
-    return data["choices"]["message"]["content"].strip()
+    return data["choices"][0]["message"]["content"].strip()
 
 
 def _prompt_situation(context: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -103,14 +103,24 @@ def _prompt_situation(context: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
         "USER NOTE (optional):\n"
         f"{user_note if user_note else '(none)'}\n\n"
         "TASK:\n"
-        "Write a situation description for retrieval.\n\n"
+        "Extract the retrieval pattern from this code review comment.\n\n"
         "RULES:\n"
-        "- 2 sentences max.\n"
-        "- Mention concrete entities (class names, field names, function names).\n"
-        "- Describe WHEN this matters (trigger/condition).\n"
-        "- Avoid generic filler (\"important\", \"be careful\", \"issue\").\n"
-        "- Output in English.\n"
-        "- Output ONLY the situation text (no headings).\n"
+        "- 2 sentences max\n"
+        "- Focus on the PATTERN/SITUATION, not the specific domain (avoid business logic terms)\n"
+        "- Describe WHEN this applies (what code pattern triggers this)\n"
+        "- Use technical terms (undefined, null, optional, edge case) over domain terms\n"
+        "- Make it retrievable: think 'would this match similar situations in different domains?'\n"
+        "- Avoid: specific variable names, business logic, file names, generic advice\n"
+        "- Output ONLY the pattern description (no meta text)\n\n"
+        "GOOD EXAMPLES:\n"
+        "- Test file for mapper method accepting optional object (Type | undefined): missing test case for fully undefined parent object, only tests undefined nested properties.\n"
+        "- API mapper class renaming response fields: fields consumed by external clients may break dependencies.\n"
+        "- Service method using optional chaining (?.) on nested objects: early returns might skip validation.\n"
+        "- Validator helper processing optional config object: null vs undefined handled differently.\n\n"
+        "BAD EXAMPLES:\n"
+        "- When calculating patient medication dosages in the pharmacy system, verify the prescription object exists before accessing drug interaction fields. [too domain-specific - should be: 'When accessing nested properties on optional objects, check parent object existence first']\n"
+        "- Be careful when changing code to handle edge cases. [too generic]\n"
+        "- When updating SpecificModelMapper property called `foo` to `bar`. [too specific to implementation]\n"
     )
 
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
@@ -169,7 +179,7 @@ def _validate_lesson(text: str) -> Tuple[bool, str]:
         return False, "lesson_too_short"
     if len(t) > 220:
         return False, "lesson_too_long"
-    starters = ("always", "never", "ensure", "avoid", "verify", "check", "prefer", "consider", "use")
+    starters = ("always", "never", "ensure", "avoid", "verify", "validate", "assign", "reject", "apply",  "check", "prefer", "consider", "use") # This might be too restrictive
     if not t.lower().startswith(starters):
         return False, "lesson_not_imperative"
     if not t.endswith((".", "!", "?")):
@@ -180,7 +190,7 @@ def _validate_lesson(text: str) -> Tuple[bool, str]:
 def build_memories(
     raw_path: str,
     out_dir: str = "data/phase0",
-    model: str = "meta-llama/llama-3.1-8b-instruct",
+    model: str = "anthropic/claude-haiku-4.5",
     sleep_s: float = 0.25,
 ) -> str:
     api_key = os.getenv("OPENROUTER_API_KEY")
