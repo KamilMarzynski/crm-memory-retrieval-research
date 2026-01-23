@@ -272,18 +272,6 @@ def build_memories(
                 continue
 
             original_conf = _confidence_map(c.get("confidence", "medium"))
-            coherence = 1.0
-            fused_conf = round((original_conf * 0.5) + (coherence * 0.5), 2)
-            if fused_conf < 0.6:
-                rej_f.write(
-                    json.dumps(
-                        {"comment_id": c.get("id"), "stage": "confidence", "reason": "below_threshold", "value": fused_conf},
-                        ensure_ascii=False,
-                    )
-                    + "\n"
-                )
-                rejected += 1
-                continue
 
             memory = {
                 "id": _stable_id(c.get("id", str(datetime.now().timestamp())), situation, lesson),
@@ -295,7 +283,7 @@ def build_memories(
                     "language": _lang_from_file(c.get("file", "")),
                     "tags": [],
                     "severity": c.get("severity", "info"),
-                    "confidence": fused_conf,
+                    "confidence": original_conf,
                     "author": "pre0-openrouter",
                     "source_comment_id": c.get("id"),
                     "status": c.get("status", None),
