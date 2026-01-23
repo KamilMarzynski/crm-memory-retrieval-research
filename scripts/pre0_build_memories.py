@@ -216,6 +216,17 @@ def build_memories(
 
     with open(out_path, "w", encoding="utf-8") as out_f, open(reject_path, "w", encoding="utf-8") as rej_f:
         for c in comments:
+            if c.get("status") == 'rejected':
+                rej_f.write(
+                    json.dumps(
+                        {"comment_id": c.get("id"), "stage": "status", "reason": "comment_rejected"},
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+                rejected += 1
+                continue
+            
             situation = _call_openrouter(
                 api_key=api_key,
                 model=model,
