@@ -76,13 +76,9 @@ def _call_openrouter(
 def _prompt_situation(context: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
     code = (c.get("code_snippet") or "").strip()
     user_note = (c.get("user_note") or "").strip()
-    file_ = c.get("file", "")
+    file = c.get("file", "")
     severity = c.get("severity", "info")
     comment = c.get("message", "")
-
-    context_short = context.strip()
-    if len(context_short) > 1800:
-        context_short = context_short[:1800] + "..."
 
     system = (
         "You extract reusable engineering knowledge from code reviews. "
@@ -90,37 +86,42 @@ def _prompt_situation(context: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
     )
 
     user = (
-        "PR CONTEXT (short):\n"
-        f"{context_short}\n\n"
-        f"FILE: {file_}\n"
-        f"SEVERITY: {severity}\n\n"
-        "CODE SNIPPET:\n"
-        "-----\n"
-        f"{code}\n"
-        "-----\n\n"
-        "CODE REVIEW COMMENT:\n"
-        f"{comment}\n\n"
-        "USER NOTE (optional):\n"
-        f"{user_note if user_note else '(none)'}\n\n"
-        "TASK:\n"
-        "Extract the retrieval pattern from this code review comment.\n\n"
-        "RULES:\n"
-        "- 2 sentences max\n"
-        "- Focus on the PATTERN/SITUATION, not the specific domain (avoid business logic terms)\n"
-        "- Describe WHEN this applies (what code pattern triggers this)\n"
-        "- Use technical terms (undefined, null, optional, edge case) over domain terms\n"
-        "- Make it retrievable: think 'would this match similar situations in different domains?'\n"
-        "- Avoid: specific variable names, business logic, file names, generic advice\n"
-        "- Output ONLY the pattern description (no meta text)\n\n"
-        "GOOD EXAMPLES:\n"
-        "- Test file for mapper method accepting optional object (Type | undefined): missing test case for fully undefined parent object, only tests undefined nested properties.\n"
-        "- API mapper class renaming response fields: fields consumed by external clients may break dependencies.\n"
-        "- Service method using optional chaining (?.) on nested objects: early returns might skip validation.\n"
-        "- Validator helper processing optional config object: null vs undefined handled differently.\n\n"
-        "BAD EXAMPLES:\n"
-        "- When calculating patient medication dosages in the pharmacy system, verify the prescription object exists before accessing drug interaction fields. [too domain-specific - should be: 'When accessing nested properties on optional objects, check parent object existence first']\n"
-        "- Be careful when changing code to handle edge cases. [too generic]\n"
-        "- When updating SpecificModelMapper property called `foo` to `bar`. [too specific to implementation]\n"
+        f"""PR CONTEXT:
+
+        {context}
+
+        FILE: {file}
+        SEVERITY: {severity}
+        CODE SNIPPET:
+
+        {code}
+
+        CODE REVIEW COMMENT:
+        {comment}
+
+        USER NOTE (optional)
+        {user_note if user_note else '(none)'}
+
+        TASK:
+        Extract the retrieval pattern from this code review comment.
+
+        RULES:
+         - 2 sentences max
+         - Focus on the PATTERN/SITUATION, not the specific domain (avoid business logic terms)
+         - Describe WHEN this applies (what code pattern triggers this)
+         - Use technical terms (undefined, null, optional, edge case) over domain terms
+         - Make it retrievable: think 'would this match similar situations in different domains?'
+         - Avoid: specific variable names, business logic, file names, generic advice
+         - Output ONLY the pattern description (no meta text)
+        GOOD EXAMPLES:
+         - Test file for mapper method accepting optional object (Type | undefined): missing test case for fully undefined parent object, only tests undefined nested properties.
+         - API mapper class renaming response fields: fields consumed by external clients may break dependencies.
+         - Service method using optional chaining (?.) on nested objects: early returns might skip validation.
+         - Validator helper processing optional config object: null vs undefined handled differently.
+        BAD EXAMPLES:
+         - When calculating patient medication dosages in the pharmacy system, verify the prescription object exists before accessing drug interaction fields. [too domain-specific - should be: 'When accessing nested properties on optional objects, check parent object existence first']
+         - Be careful when changing code to handle edge cases. [too generic]
+         - When updating SpecificModelMapper property called `foo` to `bar`. [too specific to implementation]"""
     )
 
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
@@ -364,7 +365,7 @@ Examples:
                 total_failed += 1
             print()
 
-        print(f"=== Summary ===")
+        print("=== Summary ===")
         print(f"Successfully processed: {total_success}")
         print(f"Failed: {total_failed}")
     else:
