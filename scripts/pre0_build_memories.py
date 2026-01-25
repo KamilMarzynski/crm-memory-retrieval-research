@@ -189,7 +189,7 @@ def _validate_lesson(text: str) -> Tuple[bool, str]:
 
 def build_memories(
     raw_path: str,
-    out_dir: str = "data/phase0",
+    out_dir: str = "data/phase0_memories",
     model: str = "anthropic/claude-haiku-4.5",
     sleep_s: float = 0.25,
 ) -> str:
@@ -313,9 +313,60 @@ def build_memories(
 
 
 if __name__ == "__main__":
-    import sys
+    import argparse
 
-    if len(sys.argv) < 2:
-        raise SystemExit("Usage: pre0_build_memories.py data/raw/review_batch_001.json")
+    parser = argparse.ArgumentParser(
+        description="Build memories from code review JSON files",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Process single file
+  python scripts/pre0_build_memories.py data/review_data/review_001.json
 
-    build_memories(sys.argv[1])
+  # Process all JSON files in directory
+  python scripts/pre0_build_memories.py --all data/review_data
+        """,
+    )
+    parser.add_argument(
+        "path",
+        help="Path to a JSON file or directory (when using --all)",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Process all .json files in the specified directory",
+    )
+
+    args = parser.parse_args()
+
+    if args.all:
+        # Process all JSON files in directory
+        dir_path = Path(args.path)
+        if not dir_path.is_dir():
+            raise SystemExit(f"Error: {args.path} is not a directory")
+
+        json_files = sorted(dir_path.glob("*.json"))
+        if not json_files:
+            raise SystemExit(f"No .json files found in {args.path}")
+
+        print(f"Found {len(json_files)} JSON file(s) to process\n")
+
+        total_success = 0
+        total_failed = 0
+
+        for i, json_file in enumerate(json_files, 1):
+            print(f"[{i}/{len(json_files)}] Processing: {json_file.name}")
+            try:
+                build_memories(str(json_file))
+                total_success += 1
+            except Exception as e:
+                print(f"✗ Failed to process {json_file.name}: {e}")
+                total_failed += 1
+            print()
+
+        print(f"=== Summary ===")
+        print(f"Successfully processed: {total_success}")
+        print(f"Failed: {total_failed}")
+    else:
+        # Process single file
+        build_memories(args.path)
