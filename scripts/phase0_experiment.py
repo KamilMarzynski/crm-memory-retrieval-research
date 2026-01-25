@@ -267,6 +267,16 @@ def run_experiment(
     retrieved_ground_truth = all_retrieved_ids & ground_truth_ids
     recall = len(retrieved_ground_truth) / len(ground_truth_ids) if ground_truth_ids else 0.0
 
+    # Calculate percentage of retrieved memories with user_note
+    retrieved_with_user_note = sum(
+        1 for mem_id in all_retrieved_ids
+        if (mem := next((m for m in all_memories if m["id"] == mem_id), None))
+        and mem.get("metadata", {}).get("user_note")
+    )
+    pct_with_user_note = (
+        retrieved_with_user_note / len(all_retrieved_ids) if all_retrieved_ids else 0.0
+    )
+
     # Build results
     results = {
         "experiment_id": f"exp_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
@@ -287,6 +297,8 @@ def run_experiment(
             "total_unique_retrieved": len(all_retrieved_ids),
             "ground_truth_retrieved": len(retrieved_ground_truth),
             "recall": round(recall, 4),
+            "retrieved_with_user_note": retrieved_with_user_note,
+            "pct_retrieved_with_user_note": round(pct_with_user_note, 4),
         },
         "retrieved_ground_truth_ids": list(retrieved_ground_truth),
         "missed_ground_truth_ids": list(ground_truth_ids - all_retrieved_ids),
@@ -308,6 +320,7 @@ def run_experiment(
     print(f"Ground truth memories: {len(ground_truth_ids)}")
     print(f"Retrieved (unique): {len(all_retrieved_ids)}")
     print(f"Ground truth retrieved: {len(retrieved_ground_truth)}")
+    print(f"Retrieved with user_note: {retrieved_with_user_note} ({pct_with_user_note:.1%})")
     print(f"\nRECALL: {recall:.1%}")
     print("=" * 60)
 
