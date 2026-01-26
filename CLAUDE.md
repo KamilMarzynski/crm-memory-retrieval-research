@@ -12,6 +12,9 @@ Research repository for experimenting with memory retrieval techniques for the [
 # Install dependencies (uses uv package manager)
 uv sync
 
+# Export code review data to CSV (for external tools)
+uv run python scripts/export_review_data_to_csv.py
+
 # Extract memories from raw code review data (requires OPENROUTER_API_KEY)
 uv run python scripts/pre0_build_memories.py data/review_data/<file>.json
 
@@ -50,11 +53,13 @@ data/
 
 | Script | Purpose |
 |--------|---------|
+| `export_review_data_to_csv.py` | Export code review comments from JSON to CSV format |
 | `pre0_build_memories.py` | Extract memories from raw code review JSON via LLM |
 | `phase0_sqlite_fts.py` | Build SQLite FTS5 database from JSONL memories |
 | `phase0_build_test_cases.py` | Generate self-contained test cases from raw data and memories |
 | `phase0_experiment.py` | Run retrieval experiments from test cases, measure recall |
 | `fetch_memories.py` | CLI tool to test memory search |
+| `phase0_common.py` | Shared utilities for all phase0 scripts |
 
 ## Architecture
 
