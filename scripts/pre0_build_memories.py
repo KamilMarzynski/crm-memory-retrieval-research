@@ -130,31 +130,30 @@ def _prompt_situation(context: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
 def _prompt_lesson(situation: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
     comment = c.get("message", "")
     rationale = (c.get("rationale") or "").strip()
-    verified = (c.get("verifiedBy") or "").strip()
 
     system = (
-        "You convert code review feedback into a single actionable lesson. "
-        "Keep it concise and imperative."
+        """You convert code review feedback into a single actionable lesson.
+        Keep it concise and imperative."""
     )
 
     user = (
-        "SITUATION:\n"
-        f"{situation}\n\n"
-        "COMMENT:\n"
-        f"{comment}\n\n"
-        "RATIONALE (optional):\n"
-        f"{rationale if rationale else '(none)'}\n\n"
-        "VERIFIED BY (optional):\n"
-        f"{verified if verified else '(none)'}\n\n"
-        "TASK:\n"
-        "Write ONE actionable lesson (imperative), max 160 characters.\n\n"
-        "GOOD EXAMPLES:\n"
-        "- Always add a deprecation period when renaming API fields to avoid breaking clients.\n"
-        "- Avoid mutating reduce accumulators; return a new object to keep merging logic immutable.\n\n"
-        "RULES:\n"
-        "- One sentence.\n"
-        "- Starts with an imperative cue: Always / Never / Ensure / Avoid / Verify / Check / Prefer.\n"
-        "- Output ONLY the lesson text.\n"
+        f"""SITUATION:
+        {situation}
+
+        COMMENT:
+        {comment}
+
+        RATIONALE (optional):
+        {rationale if rationale else '(none)'}
+        TASK:
+        Write ONE actionable lesson (imperative), max 160 characters.
+        GOOD EXAMPLES:
+        - Always add a deprecation period when renaming API fields to avoid breaking clients.
+        - Avoid mutating reduce accumulators; return a new object to keep merging logic immutable.
+        RULES:
+        - One sentence.
+        - Starts with an imperative cue: Always / Never / Ensure / Avoid / Verify / Check / Prefer.
+        - Output ONLY the lesson text."""
     )
 
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
