@@ -18,13 +18,16 @@ uv run python scripts/pre0_build_memories.py data/review_data/<file>.json
 # Build/rebuild SQLite FTS5 search database
 uv run python scripts/phase0_sqlite_fts.py --rebuild
 
+# Build test cases from raw data and extracted memories
+uv run python scripts/phase0_build_test_cases.py
+
 # Test memory search
 uv run python scripts/fetch_memories.py "your search query"
 
-# Run retrieval experiment on single file (requires OPENROUTER_API_KEY)
-uv run python scripts/phase0_experiment.py data/review_data/<file>.json
+# Run retrieval experiment on single test case (requires OPENROUTER_API_KEY)
+uv run python scripts/phase0_experiment.py data/phase0_test_cases/<file>.json
 
-# Run retrieval experiment on all files
+# Run retrieval experiment on all test cases
 uv run python scripts/phase0_experiment.py --all
 ```
 
@@ -33,11 +36,14 @@ uv run python scripts/phase0_experiment.py --all
 ```
 data/
 ├── review_data/          # Input: Raw code review JSON files
-├── phase0_memories/      # Output: Extracted memories (JSONL) + SQLite DB
-│   ├── memories_*.jsonl  # Accepted memories
-│   ├── rejected_*.jsonl  # Rejected memories
-│   └── memories.db       # FTS5 search database
-└── phase0_results/       # Output: Experiment results (JSON)
+└── phase0/               # Phase 0: Keyword search experiments
+    ├── memories/         # Extracted memories (JSONL) + SQLite DB
+    │   ├── memories_*.jsonl  # Accepted memories
+    │   ├── rejected_*.jsonl  # Rejected memories
+    │   └── memories.db       # FTS5 search database
+    ├── test_cases/       # Self-contained test cases for experiments
+    │   └── *.json        # One test case per PR (filtered diff + ground truth IDs)
+    └── results/          # Experiment results (JSON)
 ```
 
 ## Scripts
@@ -46,7 +52,8 @@ data/
 |--------|---------|
 | `pre0_build_memories.py` | Extract memories from raw code review JSON via LLM |
 | `phase0_sqlite_fts.py` | Build SQLite FTS5 database from JSONL memories |
-| `phase0_experiment.py` | Run retrieval experiments, measure recall |
+| `phase0_build_test_cases.py` | Generate self-contained test cases from raw data and memories |
+| `phase0_experiment.py` | Run retrieval experiments from test cases, measure recall |
 | `fetch_memories.py` | CLI tool to test memory search |
 
 ## Architecture
@@ -67,10 +74,17 @@ data/
    - Indexes `situation_description` field for keyword search
    - Supports BM25 ranking
 
-4. **Retrieval Experiment** (`scripts/phase0_experiment.py`):
-   - Takes raw PR data (context + diff)
-   - Generates search queries via LLM
-   - Searches memories, calculates recall against ground truth
+4. **Test Case Generation** (`scripts/phase0_build_test_cases.py`):
+   - Processes raw PR data and extracted memories
+   - Filters diffs (removes lock files, generated code, etc.)
+   - Computes ground truth memory IDs by matching comment IDs
+   - Creates self-contained test case files (skips PRs with no memories)
+   - Each test case includes: filtered diff, PR context, metadata, ground truth IDs
+
+5. **Retrieval Experiment** (`scripts/phase0_experiment.py`):
+   - Loads test case with pre-computed ground truth
+   - Generates search queries via LLM from PR context and diff
+   - Searches memories.db, calculates recall against ground truth
 
 ### Memory Schema
 

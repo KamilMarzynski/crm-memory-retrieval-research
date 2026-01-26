@@ -32,8 +32,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 # Default file paths for database and memory storage
-DEFAULT_DB_PATH = "data/phase0_memories/memories.db"
-DEFAULT_MEMORIES_DIR = "data/phase0_memories"
+DEFAULT_DB_PATH = "data/phase0/memories/memories.db"
+DEFAULT_MEMORIES_DIR = "data/phase0/memories"
 
 # Database field names (centralized to avoid magic strings)
 FIELD_ID = "id"

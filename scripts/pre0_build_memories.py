@@ -189,7 +189,7 @@ def _validate_lesson(text: str) -> Tuple[bool, str]:
 
 def build_memories(
     raw_path: str,
-    out_dir: str = "data/phase0_memories",
+    out_dir: str = "data/phase0/memories",
     model: str = "anthropic/claude-haiku-4.5",
     sleep_s: float = 0.25,
 ) -> str:
