@@ -43,7 +43,9 @@ def _confidence_map(c: str) -> float:
 
 
 def _stable_id(raw_comment_id: str, situation: str, lesson: str) -> str:
-    h = hashlib.sha1((raw_comment_id + "\n" + situation + "\n" + lesson).encode("utf-8")).hexdigest()
+    h = hashlib.sha1(
+        (raw_comment_id + "\n" + situation + "\n" + lesson).encode("utf-8")
+    ).hexdigest()
     return f"mem_{h[:12]}"
 
 
@@ -80,71 +82,107 @@ def _prompt_situation(context: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
     severity = c.get("severity", "info")
     comment = c.get("message", "")
 
-    system = (
-        "You extract reusable engineering knowledge from code reviews. "
-        "Your output will be used for retrieval. Be specific and concrete."
-    )
+    user = f"""You are an expert system that extracts reusable engineering knowledge from code reviews. Your output will be used to build a searchable knowledge base, so patterns must be specific, concrete, and retrievable for similar situations across different codebases.
 
-    user = (
-        f"""PR CONTEXT:
+        Here is the code review information you need to analyze:
 
+        <pr_context>
         {context}
+        </pr_context>
 
-        FILE: {file}
-        SEVERITY: {severity}
-        CODE SNIPPET:
+        <file_name>
+        {file}
+        </file_name>
 
+        <severity_level>
+        {severity}
+        </severity_level>
+
+        <code_snippet>
         {code}
+        </code_snippet>
 
-        CODE REVIEW COMMENT:
+        <review_comment>
         {comment}
+        </review_comment>
 
-        USER NOTE (optional)
-        {user_note if user_note else '(none)'}
+        <user_note>
+        {user_note}
+        </user_note>
 
-        TASK:
-        Extract the retrieval pattern from this code review comment.
+        Note: The user_note field is optional but **critically important** when provided. It gives you explicit guidance on what type of pattern to extract and how abstract or domain-specific your output should be.
 
-        RULES:
-         - 2 sentences max
-         - Focus on the PATTERN/SITUATION, not the specific domain (avoid business logic terms)
-         - Describe WHEN this applies (what code pattern triggers this)
-         - Use technical terms (undefined, null, optional, edge case) over domain terms
-         - Make it retrievable: think 'would this match similar situations in different domains?'
-         - Avoid: specific variable names, business logic, file names, generic advice
-         - Output ONLY the pattern description (no meta text)
-        GOOD EXAMPLES:
-         - Test file for mapper method accepting optional object (Type | undefined): missing test case for fully undefined parent object, only tests undefined nested properties.
-         - API mapper class renaming response fields: fields consumed by external clients may break dependencies.
-         - Service method using optional chaining (?.) on nested objects: early returns might skip validation.
-         - Validator helper processing optional config object: null vs undefined handled differently.
-        BAD EXAMPLES:
-         - When calculating patient medication dosages in the pharmacy system, verify the prescription object exists before accessing drug interaction fields. [too domain-specific - should be: 'When accessing nested properties on optional objects, check parent object existence first']
-         - Be careful when changing code to handle edge cases. [too generic]
-         - When updating SpecificModelMapper property called `foo` to `bar`. [too specific to implementation]"""
-    )
+        Your task is to extract a reusable pattern from this code review comment that can help engineers in similar situations.
 
-    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        **Understanding Abstraction Levels:**
+
+        You need to determine the appropriate abstraction level for your output:
+
+        1. **Technical/Abstract Pattern** - Focus on code structure and technical concerns, avoiding business domain terms
+        - Example: "Service method using optional chaining (?.) on nested objects: early returns might skip validation."
+        
+        2. **Domain-Specific Pattern** - Include business context when it's essential to the pattern
+        - Example: "Payment processing service handling refund requests: verify transaction settlement status before allowing partial refunds to prevent double-crediting."
+
+        **Decision Process:**
+        - If user_note is provided and indicates a need for domain context or business logic preservation, extract a domain-specific pattern
+        - If user_note is provided and indicates technical focus, extract a technical/abstract pattern
+        - If user_note is not provided or is ambiguous, default to technical/abstract pattern
+
+        **Pattern Extraction Rules:**
+        1. Maximum 2 sentences
+        2. Describe WHEN this pattern applies (what code pattern or situation triggers this concern)
+        3. For technical patterns: Use technical terms (undefined, null, optional, edge case, validation, error handling) instead of domain-specific terms
+        4. For domain patterns: Include necessary business context while keeping it concise
+        5. Make it retrievable: ask yourself "would this match similar situations in other projects or domains?"
+        6. Avoid: specific variable names, file names, overly generic advice
+        7. Output ONLY the pattern description - no meta-text, explanations, or preambles
+
+        **Reference Examples:**
+
+        Good technical/abstract patterns:
+        - Test file for mapper method accepting optional object (Type | undefined): missing test case for fully undefined parent object, only tests undefined nested properties.
+        - API mapper class renaming response fields: fields consumed by external clients may break dependencies.
+        - Service method using optional chaining (?.) on nested objects: early returns might skip validation.
+        - Validator helper processing optional config object: null vs undefined handled differently.
+
+        Bad patterns to avoid:
+        - "When calculating patient medication dosages in the pharmacy system, verify the prescription object exists before accessing drug interaction fields." [Too domain-specific when technical pattern would suffice - should be: "When accessing nested properties on optional objects, check parent object existence first"]
+        - "Be careful when changing code to handle edge cases." [Too generic - not actionable]
+        - "When updating SpecificModelMapper property called `foo` to `bar`." [Too specific to implementation details]
+
+        **Your Process:**
+
+        First, wrap your work in <analysis> tags. It's OK for this section to be quite long. In this section:
+        1. Quote the user_note verbatim if it was provided, or note that it was not provided
+        2. Based on the user_note (or its absence), explicitly state whether you should extract a technical/abstract pattern or a domain-specific pattern, with your reasoning
+        3. Quote the key parts of the review comment that reveal the core issue or concern
+        4. Identify the triggering code pattern or situation (what code structure or scenario causes this concern)
+        5. Draft 2-3 candidate pattern descriptions
+        6. For each candidate, count the sentences to verify it's maximum 2 sentences
+        7. For each candidate, evaluate whether it meets the rules: appropriate abstraction level, retrievable, avoids specifics, actionable
+        8. Select the best candidate
+
+        Then, provide your final pattern inside <pattern> tags. Remember: output ONLY the pattern description itself with no additional commentary."""
+
+    return [{"role": "user", "content": user}]
 
 
 def _prompt_lesson(situation: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
     comment = c.get("message", "")
     rationale = (c.get("rationale") or "").strip()
 
-    system = (
-        """You convert code review feedback into a single actionable lesson.
+    system = """You convert code review feedback into a single actionable lesson.
         Keep it concise and imperative."""
-    )
 
-    user = (
-        f"""SITUATION:
+    user = f"""SITUATION:
         {situation}
 
         COMMENT:
         {comment}
 
         RATIONALE (optional):
-        {rationale if rationale else '(none)'}
+        {rationale if rationale else "(none)"}
         TASK:
         Write ONE actionable lesson (imperative), max 160 characters.
         GOOD EXAMPLES:
@@ -154,7 +192,6 @@ def _prompt_lesson(situation: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
         - One sentence.
         - Starts with an imperative cue: Always / Never / Ensure / Avoid / Verify / Check / Prefer.
         - Output ONLY the lesson text."""
-    )
 
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -179,7 +216,21 @@ def _validate_lesson(text: str) -> Tuple[bool, str]:
         return False, "lesson_too_short"
     if len(t) > 220:
         return False, "lesson_too_long"
-    starters = ("always", "never", "ensure", "avoid", "verify", "validate", "assign", "reject", "apply",  "check", "prefer", "consider", "use") # This might be too restrictive
+    starters = (
+        "always",
+        "never",
+        "ensure",
+        "avoid",
+        "verify",
+        "validate",
+        "assign",
+        "reject",
+        "apply",
+        "check",
+        "prefer",
+        "consider",
+        "use",
+    )  # This might be too restrictive
     if not t.lower().startswith(starters):
         return False, "lesson_not_imperative"
     if not t.endswith((".", "!", "?")):
@@ -208,25 +259,32 @@ def build_memories(
     reject_path = str(Path(out_dir) / f"rejected_{Path(raw_path).stem}_{ts}.jsonl")
 
     repo = _short_repo_name(meta.get("repoPath", ""))
-    pr_context = f"{meta.get('sourceBranch','?')} → {meta.get('targetBranch','?')}"
+    pr_context = f"{meta.get('sourceBranch', '?')} → {meta.get('targetBranch', '?')}"
     gathered_at = meta.get("gatheredAt", "")
 
     written = 0
     rejected = 0
 
-    with open(out_path, "w", encoding="utf-8") as out_f, open(reject_path, "w", encoding="utf-8") as rej_f:
+    with (
+        open(out_path, "w", encoding="utf-8") as out_f,
+        open(reject_path, "w", encoding="utf-8") as rej_f,
+    ):
         for c in comments:
-            if c.get("status") == 'rejected':
+            if c.get("status") == "rejected":
                 rej_f.write(
                     json.dumps(
-                        {"comment_id": c.get("id"), "stage": "status", "reason": "comment_rejected"},
+                        {
+                            "comment_id": c.get("id"),
+                            "stage": "status",
+                            "reason": "comment_rejected",
+                        },
                         ensure_ascii=False,
                     )
                     + "\n"
                 )
                 rejected += 1
                 continue
-            
+
             situation = _call_openrouter(
                 api_key=api_key,
                 model=model,
@@ -240,7 +298,12 @@ def build_memories(
             if not ok_s:
                 rej_f.write(
                     json.dumps(
-                        {"comment_id": c.get("id"), "stage": "situation", "reason": reason_s, "text": situation},
+                        {
+                            "comment_id": c.get("id"),
+                            "stage": "situation",
+                            "reason": reason_s,
+                            "text": situation,
+                        },
                         ensure_ascii=False,
                     )
                     + "\n"
@@ -263,7 +326,12 @@ def build_memories(
             if not ok_l:
                 rej_f.write(
                     json.dumps(
-                        {"comment_id": c.get("id"), "stage": "lesson", "reason": reason_l, "text": lesson},
+                        {
+                            "comment_id": c.get("id"),
+                            "stage": "lesson",
+                            "reason": reason_l,
+                            "text": lesson,
+                        },
                         ensure_ascii=False,
                     )
                     + "\n"
@@ -274,7 +342,9 @@ def build_memories(
             original_conf = _confidence_map(c.get("confidence", "medium"))
 
             memory = {
-                "id": _stable_id(c.get("id", str(datetime.now().timestamp())), situation, lesson),
+                "id": _stable_id(
+                    c.get("id", str(datetime.now().timestamp())), situation, lesson
+                ),
                 "situation_description": situation,
                 "lesson": lesson,
                 "metadata": {
@@ -298,7 +368,9 @@ def build_memories(
                     "verifiedBy": c.get("verifiedBy", None),
                     "pr_context": pr_context,
                     "gathered_at": gathered_at,
-                    "raw_context_hash": hashlib.sha1(context.encode("utf-8")).hexdigest()[:12],
+                    "raw_context_hash": hashlib.sha1(
+                        context.encode("utf-8")
+                    ).hexdigest()[:12],
                 },
             }
 

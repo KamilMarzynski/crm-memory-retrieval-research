@@ -4,9 +4,10 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from phase0_sqlite_fts import search_memories, get_memory_count
+from phase0_common import search_memories
+from phase0_sqlite_fts import get_memory_count
 
-DB_PATH = "data/phase0_memories/memories.db"
+DB_PATH = "data/phase0/memories/memories.db"
 
 
 def main():

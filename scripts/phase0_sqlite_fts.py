@@ -27,9 +27,14 @@ Usage:
 
 import json
 import sqlite3
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
+
+# Add scripts directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent))
+from phase0_common import load_memories as common_load_memories
 
 # Default file paths for database and memory storage
 DEFAULT_DB_PATH = "data/phase0/memories/memories.db"
@@ -237,58 +242,6 @@ def create_database(db_path: str) -> None:
         """)
 
 
-def load_memories(phase0_dir: str) -> List[Dict[str, Any]]:
-    """
-    Load all accepted memories from JSONL files in the phase0 directory.
-
-    This function scans the directory for files matching the pattern
-    "memories_*.jsonl" (accepted memories only, not rejected_*.jsonl) and
-    parses each line as a JSON memory object.
-
-    Args:
-        phase0_dir: Path to directory containing JSONL memory files.
-                    Typically "data/phase0_memories/".
-
-    Returns:
-        List of memory dictionaries, each containing:
-            - id: Unique memory identifier
-            - situation_description: When this knowledge applies
-            - lesson: Actionable guidance
-            - metadata: Dict with repo, language, severity, confidence
-            - source: Dict with original code review context
-
-    File Format:
-        Each JSONL file contains one JSON object per line (newline-delimited JSON).
-        Example:
-            {"id": "mem_abc123", "situation_description": "...", "lesson": "..."}
-            {"id": "mem_def456", "situation_description": "...", "lesson": "..."}
-
-    Raises:
-        json.JSONDecodeError: If a line contains malformed JSON.
-        FileNotFoundError: If phase0_dir doesn't exist.
-
-    Note:
-        Empty lines are skipped.
-    """
-    memories = []
-    phase0_path = Path(phase0_dir)
-
-    # Find all accepted memory files (memories_*.jsonl pattern)
-    # This excludes rejected_*.jsonl files which contain low-quality extractions
-    for jsonl_file in sorted(phase0_path.glob("memories_*.jsonl")):
-        with open(jsonl_file, encoding="utf-8") as f:
-            for line_num, line in enumerate(f, start=1):
-                line = line.strip()
-                if line:  # Skip empty lines
-                    try:
-                        memories.append(json.loads(line))
-                    except json.JSONDecodeError as e:
-                        # Provide helpful error message with file and line number
-                        print(f"Warning: Skipping malformed JSON in {jsonl_file.name}:{line_num}: {e}")
-
-    return memories
-
-
 def insert_memories(db_path: str, memories: List[Dict[str, Any]]) -> int:
     """
     Insert memories into the database, triggering automatic FTS indexing.
@@ -344,85 +297,6 @@ def insert_memories(db_path: str, memories: List[Dict[str, Any]]) -> int:
                 print(f"Warning: Skipping memory {mem.get(FIELD_ID, '?')}: {e}")
 
     return inserted
-
-
-def search_memories(
-    db_path: str,
-    query: str,
-    limit: int = 10,
-) -> List[Dict[str, Any]]:
-    """
-    Search memories using FTS5 full-text search with BM25 ranking.
-
-    This function performs keyword-based search on the situation_description
-    field and ranks results using the BM25 algorithm, which considers both
-    term frequency and document length normalization.
-
-    Args:
-        db_path: Path to SQLite database file.
-        query: Search query string. Supports FTS5 query syntax:
-               - Simple terms: "async function"
-               - Boolean: "async AND function", "react OR vue"
-               - Negation: "function NOT deprecated"
-               - Phrases: '"error handling"'
-               - Prefix: "handl*" (matches handle, handler, handling)
-        limit: Maximum number of results to return (default: 10).
-
-    Returns:
-        List of memory dictionaries ordered by relevance (best matches first).
-        Each dict contains:
-            - id: Unique memory identifier
-            - situation_description: When this knowledge applies
-            - lesson: Actionable guidance
-            - metadata: Dict with repo, language, severity, confidence
-            - source: Dict with original code review context
-            - rank: BM25 relevance score (LOWER is better - typically negative)
-
-    BM25 Ranking:
-        - Scores are typically negative numbers
-        - Lower (more negative) scores indicate better matches
-        - Results are automatically sorted by rank (best first)
-        - Formula considers: term frequency, inverse document frequency,
-          and document length normalization
-
-    Examples:
-        >>> search_memories("memories.db", "async error handling", limit=5)
-        [{"id": "mem_123", "rank": -2.5, ...}, ...]
-
-        >>> search_memories("memories.db", '"null check" AND javascript')
-        [{"id": "mem_456", "rank": -3.1, ...}, ...]
-
-    Note:
-        Returns empty list if query doesn't match any documents or if
-        the query syntax is invalid.
-    """
-    with get_db_connection(db_path) as conn:
-        conn.row_factory = sqlite3.Row  # Access columns by name
-        cur = conn.cursor()
-
-        # Query the FTS index and join with base table to get full record
-        #
-        # bm25(memories_fts) calculates BM25 relevance score
-        # Lower (more negative) scores = better matches
-        #
-        # The MATCH operator performs FTS5 full-text search
-        # It only searches the FTS index, so it's very fast even with many records
-        cur.execute(
-            f"""
-            SELECT m.{FIELD_ID}, m.{FIELD_SITUATION}, m.{FIELD_LESSON},
-                   m.{FIELD_METADATA}, m.{FIELD_SOURCE},
-                   bm25(memories_fts) as {FIELD_RANK}
-            FROM memories_fts fts
-            JOIN memories m ON m.rowid = fts.rowid
-            WHERE memories_fts MATCH ?
-            ORDER BY {FIELD_RANK}
-            LIMIT ?
-            """,
-            (query, limit),
-        )
-
-        # Convert Row objects to dicts using centralized helper
-        return [_row_to_memory_dict(row, include_rank=True) for row in cur.fetchall()]
 
 
 def get_memory_count(db_path: str) -> int:
@@ -543,7 +417,7 @@ def rebuild_database(
     create_database(db_path)
 
     print(f"Loading memories from {memories_dir}...")
-    memories = load_memories(memories_dir)
+    memories = common_load_memories(memories_dir)
     print(f"Found {len(memories)} memories")
 
     print("Inserting memories...")

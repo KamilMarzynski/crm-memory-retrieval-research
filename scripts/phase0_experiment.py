@@ -54,7 +54,7 @@ import requests
 
 # Add scripts directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
-from phase0_sqlite_fts import search_memories, load_memories
+from phase0_common import load_json, save_json, search_memories
 
 # OpenRouter API configuration
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -79,110 +79,6 @@ DEFAULT_RESULTS_DIR = "data/phase0/results"
 
 # Batch execution configuration
 DEFAULT_SLEEP_BETWEEN_EXPERIMENTS = 1.0  # seconds
-
-# Files to exclude from diff (meaningless for code review patterns)
-# These patterns match lock files, build artifacts, and generated code
-EXCLUDED_FILE_PATTERNS = [
-    r"package-lock\.json$",
-    r"yarn\.lock$",
-    r"pnpm-lock\.yaml$",
-    r"\.snap$",
-    r"__snapshots__/",
-    r"\.min\.js$",
-    r"\.min\.css$",
-    r"\.map$",
-    r"\.d\.ts$",
-    r"dist/",
-    r"build/",
-    r"node_modules/",
-    r"\.generated\.",
-    r"migrations/\d+",
-]
-
-
-def _load_json(path: str) -> Dict[str, Any]:
-    """
-    Load JSON file from disk.
-
-    Args:
-        path: Path to JSON file.
-
-    Returns:
-        Parsed JSON as dictionary.
-
-    Raises:
-        json.JSONDecodeError: If file contains malformed JSON.
-        FileNotFoundError: If file doesn't exist.
-    """
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def _save_json(data: Dict[str, Any], path: Path) -> None:
-    """
-    Save dictionary as JSON file.
-
-    Centralizes JSON serialization with consistent formatting.
-
-    Args:
-        data: Dictionary to save.
-        path: Path where file should be written.
-
-    Note:
-        Uses ensure_ascii=False to preserve Unicode characters.
-        Uses indent=2 for human-readable formatting.
-    """
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-
-
-def _filter_diff(full_diff: str) -> str:
-    """
-    Remove diff sections for files matching excluded patterns.
-
-    Filters out lock files, build artifacts, and generated code that don't
-    contain meaningful code review patterns. This reduces noise in LLM input.
-
-    Args:
-        full_diff: Complete git diff output.
-
-    Returns:
-        Filtered diff with excluded files removed.
-
-    Example:
-        >>> diff = "diff --git a/package-lock.json\\n+content\\ndiff --git a/src/main.ts\\n+code"
-        >>> filtered = _filter_diff(diff)
-        # package-lock.json section removed, main.ts preserved
-
-    Note:
-        Matches patterns defined in EXCLUDED_FILE_PATTERNS constant.
-    """
-    if not full_diff:
-        return ""
-
-    lines = full_diff.split("\n")
-    filtered_lines = []
-    skip_until_next_file = False
-    current_file = None
-
-    for line in lines:
-        # Detect file header in diff
-        if line.startswith("diff --git"):
-            # Extract filename from diff header (e.g., "diff --git a/path b/path")
-            match = re.search(r"[ab]/(.+?)(?:\s|$)", line)
-            if match:
-                current_file = match.group(1)
-                # Check if this file should be excluded
-                skip_until_next_file = any(
-                    re.search(pattern, current_file) for pattern in EXCLUDED_FILE_PATTERNS
-                )
-
-            if not skip_until_next_file:
-                filtered_lines.append(line)
-        elif not skip_until_next_file:
-            filtered_lines.append(line)
-
-    return "\n".join(filtered_lines)
 
 
 def _call_openrouter(
@@ -351,36 +247,6 @@ def _parse_queries_from_response(response: str) -> List[str]:
     return queries[:MAX_QUERIES_PER_EXPERIMENT]
 
 
-def _get_ground_truth_memory_ids(raw_path: str, all_memories: List[Dict[str, Any]]) -> Set[str]:
-    """
-    Get memory IDs that were extracted from this raw PR file.
-
-    Matches comment IDs between raw PR data and extracted memories to determine
-    which memories should be considered "ground truth" for this test case.
-
-    Args:
-        raw_path: Path to raw PR JSON file.
-        all_memories: List of all extracted memories.
-
-    Returns:
-        Set of memory IDs that originated from this PR's code review comments.
-
-    Note:
-        This function is used by phase0_build_test_cases.py to pre-compute
-        ground truth when generating test cases. It's kept here for reusability.
-    """
-    raw_data = _load_json(raw_path)
-    comment_ids = {c.get("id") for c in raw_data.get("code_review_comments", [])}
-
-    ground_truth_ids = set()
-    for mem in all_memories:
-        source_comment_id = mem.get("metadata", {}).get("source_comment_id")
-        if source_comment_id in comment_ids:
-            ground_truth_ids.add(mem["id"])
-
-    return ground_truth_ids
-
-
 def run_experiment(
     test_case_path: str,
     db_path: str = DEFAULT_DB_PATH,
@@ -444,7 +310,7 @@ def run_experiment(
         raise SystemExit(f"Missing {OPENROUTER_API_KEY_ENV} environment variable")
 
     # Load test case (pre-processed by phase0_build_test_cases.py)
-    test_case = _load_json(test_case_path)
+    test_case = load_json(test_case_path)
     context = test_case.get("pr_context", "")
     filtered_diff = test_case.get("filtered_diff", "")
     meta = test_case.get("metadata", {})
@@ -517,7 +383,7 @@ def run_experiment(
     # Save results to JSON file
     Path(results_dir).mkdir(parents=True, exist_ok=True)
     results_path = Path(results_dir) / f"results_{test_case.get('test_case_id', 'unknown')}_{results['experiment_id']}.json"
-    _save_json(results, results_path)
+    save_json(results, results_path)
 
     # Print summary to console
     print("\n" + "=" * 60)

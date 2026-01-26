@@ -37,14 +37,14 @@ Example:
 """
 
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 # Add scripts directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
-from phase0_experiment import _filter_diff, _load_json, _get_ground_truth_memory_ids
-from phase0_sqlite_fts import load_memories
+from phase0_common import load_json, save_json, load_memories
 
 # Default directory paths
 DEFAULT_RAW_DIR = "data/review_data"
@@ -64,23 +64,100 @@ FIELD_GROUND_TRUTH_COUNT = "ground_truth_count"
 # Test case ID prefix
 TEST_CASE_ID_PREFIX = "tc_"
 
+# Files to exclude from diff (meaningless for code review patterns)
+# These patterns match lock files, build artifacts, and generated code
+EXCLUDED_FILE_PATTERNS = [
+    r"package-lock\.json$",
+    r"yarn\.lock$",
+    r"pnpm-lock\.yaml$",
+    r"\.snap$",
+    r"__snapshots__/",
+    r"\.min\.js$",
+    r"\.min\.css$",
+    r"\.map$",
+    r"\.d\.ts$",
+    r"dist/",
+    r"build/",
+    r"node_modules/",
+    r"\.generated\.",
+    r"migrations/\d+",
+]
 
-def _save_test_case(test_case: Dict[str, Any], output_path: Path) -> None:
+
+def _filter_diff(full_diff: str) -> str:
     """
-    Save test case to JSON file.
+    Remove diff sections for files matching excluded patterns.
 
-    Centralizes file writing logic with consistent formatting.
+    Filters out lock files, build artifacts, and generated code that don't
+    contain meaningful code review patterns. This reduces noise in test cases.
 
     Args:
-        test_case: Test case dictionary to save.
-        output_path: Path where JSON file should be written.
+        full_diff: Complete git diff output.
+
+    Returns:
+        Filtered diff with excluded files removed.
 
     Note:
-        Uses ensure_ascii=False to preserve Unicode characters in diffs.
-        Uses indent=2 for human-readable formatting.
+        Matches patterns defined in EXCLUDED_FILE_PATTERNS constant.
     """
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(test_case, f, indent=2, ensure_ascii=False)
+    if not full_diff:
+        return ""
+
+    lines = full_diff.split("\n")
+    filtered_lines = []
+    skip_until_next_file = False
+    current_file = None
+
+    for line in lines:
+        # Detect file header in diff
+        if line.startswith("diff --git"):
+            # Extract filename from diff header (e.g., "diff --git a/path b/path")
+            match = re.search(r"[ab]/(.+?)(?:\s|$)", line)
+            if match:
+                current_file = match.group(1)
+                # Check if this file should be excluded
+                skip_until_next_file = any(
+                    re.search(pattern, current_file) for pattern in EXCLUDED_FILE_PATTERNS
+                )
+
+            if not skip_until_next_file:
+                filtered_lines.append(line)
+        elif not skip_until_next_file:
+            filtered_lines.append(line)
+
+    return "\n".join(filtered_lines)
+
+
+def _get_ground_truth_memory_ids(raw_path: str, all_memories: List[Dict[str, Any]]) -> Set[str]:
+    """
+    Get memory IDs that were extracted from this raw PR file.
+
+    Matches comment IDs between raw PR data and extracted memories to determine
+    which memories should be considered "ground truth" for this test case.
+
+    Args:
+        raw_path: Path to raw PR JSON file.
+        all_memories: List of all extracted memories.
+
+    Returns:
+        Set of memory IDs that originated from this PR's code review comments.
+
+    Example:
+        >>> raw_data = _load_json("data/review_data/pr_123.json")
+        >>> memories = load_memories("data/phase0/memories")
+        >>> gt_ids = _get_ground_truth_memory_ids("data/review_data/pr_123.json", memories)
+        >>> print(f"Found {len(gt_ids)} ground truth memories")
+    """
+    raw_data = load_json(raw_path)
+    comment_ids = {c.get("id") for c in raw_data.get("code_review_comments", [])}
+
+    ground_truth_ids = set()
+    for mem in all_memories:
+        source_comment_id = mem.get("metadata", {}).get("source_comment_id")
+        if source_comment_id in comment_ids:
+            ground_truth_ids.add(mem["id"])
+
+    return ground_truth_ids
 
 
 def build_test_case(
@@ -122,7 +199,7 @@ def build_test_case(
 
     # Load raw PR data
     try:
-        raw_data = _load_json(str(raw_path))
+        raw_data = load_json(str(raw_path))
     except (json.JSONDecodeError, FileNotFoundError) as e:
         print(f"  ✗ Error loading raw file: {e}")
         return None
@@ -224,7 +301,7 @@ def build_test_cases(
 
             # Save test case to file
             tc_path = output_path / f"{raw_file.stem}.json"
-            _save_test_case(test_case, tc_path)
+            save_json(test_case, tc_path)
 
             print(f"  ✓ Created test case with {test_case[FIELD_GROUND_TRUTH_COUNT]} ground truth memories")
             created += 1
