@@ -101,13 +101,14 @@ def _prompt_situation(context: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
         {comment}
 
         USER NOTE (optional)
-        {user_note if user_note else '(none)'}
+        {user_note}
 
         Note: The user_note field is optional but critically important when provided. It gives you explicit guidance on what type of pattern to extract and how abstract or domain-specific your output should be.
 
         # Your Task
 
         Extract a reusable pattern from this code review comment that can help engineers in similar situations.
+        Sentences created by you should be maximally optimized for retrieval using full text search, with limited context.
 
         ## Understanding Abstraction Levels
 
@@ -126,13 +127,14 @@ def _prompt_situation(context: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
         - If user_note is not provided or is ambiguous → default to technical/abstract pattern
 
         # RULES:
-         - 2 sentences max
+         - 2 sentences max - ideally, only five words each - targeted to be easy retrieved by full text search
          - Focus on the PATTERN/SITUATION
          - Describe WHEN this applies (what code pattern triggers this)
+         - NEVER suggest code changes - it's not your role
          - Use technical terms (undefined, null, optional, edge case) over domain terms
          - Make it retrievable: think 'would this match similar situations in different domains?'
          - Avoid: specific variable names, business logic, file names, generic advice
-         - Output ONLY the pattern description (no meta text)
+         - Output ONLY the pattern description (no meta text, no headers, no markdown)
         # GOOD EXAMPLES FOR TECHNICAL/ABSTRACT PATTERNS:
          - Test file for mapper method accepting optional object (Type | undefined): missing test case for fully undefined parent object, only tests undefined nested properties.
          - API mapper class renaming response fields: fields consumed by external clients may break dependencies.
@@ -186,9 +188,6 @@ def _validate_situation(text: str) -> Tuple[bool, str]:
         return False, "situation_too_short"
     if len(t) > 450:
         return False, "situation_too_long"
-    bad = ["be careful", "important", "something", "issue", "things"]
-    if any(b in t.lower() for b in bad):
-        return False, "situation_too_generic"
     if not t.endswith((".", "!", "?")):
         return True, "ok_no_punct"
     return True, "ok"
@@ -200,9 +199,6 @@ def _validate_lesson(text: str) -> Tuple[bool, str]:
         return False, "lesson_too_short"
     if len(t) > 220:
         return False, "lesson_too_long"
-    starters = ("always", "never", "ensure", "avoid", "verify", "validate", "assign", "reject", "apply",  "check", "prefer", "consider", "use") # This might be too restrictive
-    if not t.lower().startswith(starters):
-        return False, "lesson_not_imperative"
     if not t.endswith((".", "!", "?")):
         return True, "ok_no_punct"
     return True, "ok"
