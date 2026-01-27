@@ -23,6 +23,7 @@ DEFAULT_DB_PATH = "data/phase0/memories/memories.db"
 # Database field names
 FIELD_ID = "id"
 FIELD_SITUATION = "situation_description"
+FIELD_VARIANTS = "situation_variants"
 FIELD_LESSON = "lesson"
 FIELD_METADATA = "metadata"
 FIELD_SOURCE = "source"
@@ -129,10 +130,12 @@ def search_memories(
     limit: int = 10,
 ) -> List[Dict[str, Any]]:
     """
-    Search memories using FTS5 full-text search with BM25 ranking.
+    Search memories using FTS5 full-text search on multiple situation variants.
 
-    This function performs keyword-based search on the situation_description
-    field and ranks results using the BM25 algorithm.
+    This function performs keyword-based search across all situation variants
+    (3 per memory) and ranks results using the BM25 algorithm. When multiple
+    variants of the same memory match, the memory is returned once with the
+    best (lowest) rank score.
 
     Args:
         db_path: Path to SQLite database file.
@@ -149,7 +152,8 @@ def search_memories(
         List of memory dictionaries ordered by relevance (best matches first).
         Each dict contains:
             - id: Unique memory identifier
-            - situation_description: When this knowledge applies
+            - situation_description: Primary variant for display
+            - situation_variants: All 3 variants (array)
             - lesson: Actionable guidance
             - metadata: Dict with repo, language, severity, confidence
             - source: Dict with original code review context
@@ -164,7 +168,9 @@ def search_memories(
 
     Note:
         Returns empty list if query doesn't match any documents or if
-        the query syntax is invalid.
+        the query syntax is invalid. Multiple FTS rows (variants) may match
+        the same memory, but deduplication via GROUP BY ensures each memory
+        appears only once with its best rank.
     """
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -172,34 +178,45 @@ def search_memories(
 
     try:
         # Query the FTS index and join with base table to get full record
-        # bm25(memories_fts) calculates BM25 relevance score
-        # Lower (more negative) scores = better matches
+        # Multiple FTS rows (variants) may match the same memory
+        # We'll get all matches and deduplicate in Python, keeping best rank
         cur.execute(
             f"""
-            SELECT m.{FIELD_ID}, m.{FIELD_SITUATION}, m.{FIELD_LESSON},
+            SELECT m.{FIELD_ID}, m.{FIELD_SITUATION}, m.situation_variants, m.{FIELD_LESSON},
                    m.{FIELD_METADATA}, m.{FIELD_SOURCE},
                    bm25(memories_fts) as {FIELD_RANK}
             FROM memories_fts fts
-            JOIN memories m ON m.rowid = fts.rowid
+            JOIN memories m ON m.{FIELD_ID} = fts.memory_id
             WHERE memories_fts MATCH ?
             ORDER BY {FIELD_RANK}
-            LIMIT ?
             """,
-            (query, limit),
+            (query,),
         )
 
-        # Convert Row objects to dicts
+        # Convert Row objects to dicts and deduplicate
+        # Keep first occurrence of each memory (best rank due to ORDER BY)
+        seen_ids = set()
         results = []
         for row in cur.fetchall():
+            mem_id = row[FIELD_ID]
+            if mem_id in seen_ids:
+                continue  # Skip duplicate (worse rank)
+            seen_ids.add(mem_id)
+
             memory = {
-                FIELD_ID: row[FIELD_ID],
+                FIELD_ID: mem_id,
                 FIELD_SITUATION: row[FIELD_SITUATION],
+                "situation_variants": json.loads(row["situation_variants"]) if row["situation_variants"] else [],
                 FIELD_LESSON: row[FIELD_LESSON],
                 FIELD_METADATA: json.loads(row[FIELD_METADATA]) if row[FIELD_METADATA] else {},
                 FIELD_SOURCE: json.loads(row[FIELD_SOURCE]) if row[FIELD_SOURCE] else {},
                 FIELD_RANK: row[FIELD_RANK],
             }
             results.append(memory)
+
+            # Stop when we have enough unique memories
+            if len(results) >= limit:
+                break
 
         return results
 

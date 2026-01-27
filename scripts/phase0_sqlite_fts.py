@@ -43,6 +43,7 @@ DEFAULT_MEMORIES_DIR = "data/phase0/memories"
 # Database field names (centralized to avoid magic strings)
 FIELD_ID = "id"
 FIELD_SITUATION = "situation_description"
+FIELD_VARIANTS = "situation_variants"
 FIELD_LESSON = "lesson"
 FIELD_METADATA = "metadata"
 FIELD_SOURCE = "source"
@@ -130,9 +131,16 @@ def _row_to_memory_dict(row: sqlite3.Row, include_rank: bool = False) -> Dict[st
     Returns:
         Memory dictionary with deserialized JSON fields.
     """
+    # sqlite3.Row doesn't have .get() method, need to check keys
+    try:
+        variants = row[FIELD_VARIANTS]
+    except IndexError:
+        variants = None
+
     memory = {
         FIELD_ID: row[FIELD_ID],
         FIELD_SITUATION: row[FIELD_SITUATION],
+        FIELD_VARIANTS: _deserialize_json_field(variants),
         FIELD_LESSON: row[FIELD_LESSON],
         FIELD_METADATA: _deserialize_json_field(row[FIELD_METADATA]),
         FIELD_SOURCE: _deserialize_json_field(row[FIELD_SOURCE]),
@@ -160,15 +168,25 @@ def create_database(db_path: str) -> None:
     Database Schema:
         memories:
             - id: Unique identifier (e.g., "mem_abc123def456")
-            - situation_description: When this knowledge applies (searchable)
+            - situation_description: Primary variant for display
+            - situation_variants: JSON array of 3 situation variants
             - lesson: Actionable guidance (not indexed)
             - metadata: JSON string with repo, language, severity, etc.
             - source: JSON string with original code review context
 
         memories_fts:
-            - FTS5 virtual table indexing situation_description
+            - FTS5 virtual table indexing situation variants
             - Enables fast keyword search with BM25 ranking
-            - Linked to memories table via rowid
+            - Uses many-to-one mapping: 3 FTS rows per memory (one per variant)
+            - Linked to memories table via memory_id column
+
+    Multi-Variant Architecture:
+        Each memory has 3 situation variants describing the same pattern from
+        different angles. This enables multiple search entry points per memory
+        while avoiding data duplication (lesson/metadata stored once).
+
+        Triggers automatically insert 3 FTS rows when a memory is added, and
+        keep them synchronized on updates/deletes.
 
     Note:
         The function drops any existing tables, so this is destructive!
@@ -187,57 +205,57 @@ def create_database(db_path: str) -> None:
             CREATE TABLE memories (
                 {FIELD_ID} TEXT PRIMARY KEY,
                 {FIELD_SITUATION} TEXT NOT NULL,
+                {FIELD_VARIANTS} TEXT,
                 {FIELD_LESSON} TEXT NOT NULL,
                 {FIELD_METADATA} TEXT,
                 {FIELD_SOURCE} TEXT
             )
         """)
 
-        # Create FTS5 virtual table for full-text search on situation_description
+        # Create FTS5 virtual table for full-text search on situation variants
         #
         # FTS5 is SQLite's full-text search extension that provides:
         # - Fast keyword matching across large text collections
         # - BM25 ranking algorithm (industry-standard relevance scoring)
         # - Advanced query syntax (AND, OR, NOT, phrases, prefix search)
         #
-        # The content='memories' option creates a "contentless" FTS table that
-        # references the memories table instead of duplicating data.
-        # content_rowid='rowid' links FTS rows to memories rows via SQLite's
-        # internal rowid column.
+        # This FTS table stores multiple rows per memory (one per variant).
+        # We use a separate memory_id column to link back to the base memories table.
+        # This enables many-to-one mapping: multiple FTS rows reference the same memory.
         cur.execute(f"""
             CREATE VIRTUAL TABLE memories_fts USING fts5(
-                {FIELD_SITUATION},
-                content='memories',
-                content_rowid='rowid'
+                situation_variant,
+                memory_id UNINDEXED
             )
         """)
 
         # Trigger: Automatically index new memories when inserted
-        # When a row is added to 'memories', also add it to 'memories_fts'
+        # Inserts 3 FTS rows (one per variant) all with same memory_id
+        # Uses json_each to iterate over the situation_variants JSON array
         cur.execute(f"""
             CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN
-                INSERT INTO memories_fts(rowid, {FIELD_SITUATION})
-                VALUES (new.rowid, new.{FIELD_SITUATION});
+                INSERT INTO memories_fts(situation_variant, memory_id)
+                SELECT value, new.{FIELD_ID}
+                FROM json_each(new.{FIELD_VARIANTS});
             END
         """)
 
-        # Trigger: Remove FTS index entry when memory is deleted
-        # FTS5 uses special 'delete' command to remove indexed content
+        # Trigger: Remove all FTS index entries when memory is deleted
+        # Deletes all FTS rows (all variants) that reference this memory's ID
         cur.execute(f"""
             CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN
-                INSERT INTO memories_fts(memories_fts, rowid, {FIELD_SITUATION})
-                VALUES ('delete', old.rowid, old.{FIELD_SITUATION});
+                DELETE FROM memories_fts WHERE memory_id = old.{FIELD_ID};
             END
         """)
 
         # Trigger: Update FTS index when memory is modified
-        # Must delete old content and insert new content (FTS doesn't support UPDATE)
+        # Deletes all old FTS rows and inserts new ones from updated variants
         cur.execute(f"""
             CREATE TRIGGER memories_au AFTER UPDATE ON memories BEGIN
-                INSERT INTO memories_fts(memories_fts, rowid, {FIELD_SITUATION})
-                VALUES ('delete', old.rowid, old.{FIELD_SITUATION});
-                INSERT INTO memories_fts(rowid, {FIELD_SITUATION})
-                VALUES (new.rowid, new.{FIELD_SITUATION});
+                DELETE FROM memories_fts WHERE memory_id = old.{FIELD_ID};
+                INSERT INTO memories_fts(situation_variant, memory_id)
+                SELECT value, new.{FIELD_ID}
+                FROM json_each(new.{FIELD_VARIANTS});
             END
         """)
 
@@ -280,12 +298,13 @@ def insert_memories(db_path: str, memories: List[Dict[str, Any]]) -> int:
                 cur.execute(
                     f"""
                     INSERT OR REPLACE INTO memories
-                    ({FIELD_ID}, {FIELD_SITUATION}, {FIELD_LESSON}, {FIELD_METADATA}, {FIELD_SOURCE})
-                    VALUES (?, ?, ?, ?, ?)
+                    ({FIELD_ID}, {FIELD_SITUATION}, {FIELD_VARIANTS}, {FIELD_LESSON}, {FIELD_METADATA}, {FIELD_SOURCE})
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
                         mem[FIELD_ID],
                         mem[FIELD_SITUATION],
+                        _serialize_json_field(mem.get(FIELD_VARIANTS)),
                         mem[FIELD_LESSON],
                         _serialize_json_field(mem.get(FIELD_METADATA)),
                         _serialize_json_field(mem.get(FIELD_SOURCE)),
@@ -355,7 +374,7 @@ def get_memory_by_id(db_path: str, memory_id: str) -> Optional[Dict[str, Any]]:
         # Direct lookup by primary key (very fast - uses index)
         cur.execute(
             f"""
-            SELECT {FIELD_ID}, {FIELD_SITUATION}, {FIELD_LESSON},
+            SELECT {FIELD_ID}, {FIELD_SITUATION}, {FIELD_VARIANTS}, {FIELD_LESSON},
                    {FIELD_METADATA}, {FIELD_SOURCE}
             FROM memories
             WHERE {FIELD_ID} = ?

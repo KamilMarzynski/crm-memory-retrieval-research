@@ -107,18 +107,17 @@ def _prompt_situation(context: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
 
         # Your Task
 
-        Extract a reusable pattern from this code review comment that can help engineers in similar situations.
-        Sentences created by you should be maximally optimized for retrieval using full text search, with limited context.
+        Extract a reusable pattern from this code review comment that will be easy to retrieve by full text search query. Sentences should be short and concise.
 
         ## Understanding Abstraction Levels
 
         You need to determine the appropriate abstraction level for your output:
 
         **Technical/Abstract Pattern** - Focus on code structure and technical concerns, avoiding business domain terms
-        - Example: "Service method using optional chaining (?.) on nested objects: early returns might skip validation."
+        - Example: "Method using optional chaining on nested objects. Redundant optional chaining."
 
         **Domain-Specific Pattern** - Include business context when it's essential to the pattern
-        - Example: "Payment processing service handling refund requests: verify transaction settlement status before allowing partial refunds to prevent double-crediting."
+        - Example: "Payment processing service handling refund requests,."
 
         ## Decision Process
 
@@ -126,25 +125,33 @@ def _prompt_situation(context: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
         - If user_note is provided and indicates technical focus → extract a technical/abstract pattern  
         - If user_note is not provided or is ambiguous → default to technical/abstract pattern
 
-        # RULES:
-         - 2 sentences max - ideally, only five words each - targeted to be easy retrieved by full text search
-         - Focus on the PATTERN/SITUATION
-         - Describe WHEN this applies (what code pattern triggers this)
-         - NEVER suggest code changes - it's not your role
-         - Use technical terms (undefined, null, optional, edge case) over domain terms
-         - Make it retrievable: think 'would this match similar situations in different domains?'
-         - Avoid: specific variable names, business logic, file names, generic advice
-         - Output ONLY the pattern description (no meta text, no headers, no markdown)
-        # GOOD EXAMPLES FOR TECHNICAL/ABSTRACT PATTERNS:
-         - Test file for mapper method accepting optional object (Type | undefined): missing test case for fully undefined parent object, only tests undefined nested properties.
-         - API mapper class renaming response fields: fields consumed by external clients may break dependencies.
-         - Service method using optional chaining (?.) on nested objects: early returns might skip validation.
-         - Validator helper processing optional config object: null vs undefined handled differently.
-        # GOOD EXAMPLES FOR DOMAIN-SPECIFIC PATTERNS:
-         - When calculating patient medication dosages in the pharmacy system, verify the prescription object exists before accessing drug interaction fields.
-         - When updating SpecificModelMapper property called `foo` to `bar`.
-        # BAD EXAMPLES:
-         - Be careful when changing code to handle edge cases. [too generic]"""
+          # RULES:
+          - Be very CONCISE. Generate exactly 3 SHORT sentences separated by semicolons (;).
+          - Focus on the PATTERN/SITUATION
+          - Describe WHEN this applies (what code pattern triggers this)
+          - NEVER suggest code changes - it's not your role
+          - Use technical terms (undefined, null, optional, edge case) over domain terms
+          - Make it retrievable: think 'would this match similar situations in different domains?'
+          - Output ONLY the pattern description as 3 semicolon-separated sentences (no meta text, no headers, no markdown)
+
+         # GOOD EXAMPLES FOR TECHNICAL/ABSTRACT PATTERNS:
+         - Test file for mapper method accepting optional object (Type | undefined); Missing test case for fully undefined parent object; Only tests undefined nested properties.
+         - API mapper class renaming response fields; Fields consumed by external clients; Breaking change risk.
+         - Service method using optional chaining on nested objects; Early returns might skip validation; Chained ?. operator.
+         - Validator helper processing optional config object; null vs undefined handled differently; Optional parameter validation.
+         - Missing tests for all possible conditional logic; Multiple if-else branches untested; Edge case coverage incomplete.
+         # GOOD EXAMPLES FOR DOMAIN-SPECIFIC PATTERNS:
+         - When calculating patient medication dosages in the pharmacy system; Verifying prescription object exists; Drug interaction fields accessed.
+         - When updating SpecificModelMapper property called `foo` to `bar`; Database column mapping changed; Migration script needed.
+        - Payment refund processing service; Transaction settlement status check missing; Partial refund validation.
+
+         # BAD EXAMPLES:
+         - Be careful when changing code to handle edge cases. [too generic, no specifics]
+         - API mapper class renaming response fields. Remember about updating tests. [suggests solution]
+         - Service method using optional chaining on nested objects. Check if object is required. [suggests solution]
+         - This code has a bug in the validation logic. [too vague, no pattern description]
+         - Optional chaining; Nested objects; Validation. [too terse, lacks context]
+         - The reviewOptionalChainingIssue function in UserService.ts needs null checks before accessing user.profile.settings.theme. [too specific, includes variable names and file names]."""
     )
 
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
@@ -244,26 +251,63 @@ def build_memories(
                 rejected += 1
                 continue
             
-            situation = _call_openrouter(
+            # Generate 3 semicolon-separated situation variants
+            situation_raw = _call_openrouter(
                 api_key=api_key,
                 model=model,
                 messages=_prompt_situation(context, c),
                 temperature=0.0,
-                max_tokens=220,
+                max_tokens=600,  # Increased for 3 variants
             )
-            ok_s, reason_s = _validate_situation(situation)
-            if reason_s == "ok_no_punct":
-                situation = situation.rstrip() + "."
-            if not ok_s:
+
+            # Parse semicolon-separated variants
+            variants = [v.strip() for v in situation_raw.split(';')]
+
+            # Validate we got exactly 3 variants
+            if len(variants) != 3:
                 rej_f.write(
                     json.dumps(
-                        {"comment_id": c.get("id"), "stage": "situation", "reason": reason_s, "text": situation},
+                        {
+                            "comment_id": c.get("id"),
+                            "stage": "situation",
+                            "reason": f"wrong_variant_count_{len(variants)}",
+                            "text": situation_raw
+                        },
                         ensure_ascii=False,
                     )
                     + "\n"
                 )
                 rejected += 1
                 continue
+
+            # Validate each variant individually
+            all_valid = True
+            for i, variant in enumerate(variants):
+                ok_s, reason_s = _validate_situation(variant)
+                if reason_s == "ok_no_punct":
+                    variants[i] = variant.rstrip() + "."
+                elif not ok_s:
+                    rej_f.write(
+                        json.dumps(
+                            {
+                                "comment_id": c.get("id"),
+                                "stage": "situation",
+                                "reason": f"variant_{i}_{reason_s}",
+                                "text": variant
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
+                    all_valid = False
+                    break
+
+            if not all_valid:
+                rejected += 1
+                continue
+
+            # Use first variant as primary display
+            situation = variants[0]
 
             time.sleep(sleep_s)
 
@@ -292,7 +336,8 @@ def build_memories(
 
             memory = {
                 "id": _stable_id(c.get("id", str(datetime.now().timestamp())), situation, lesson),
-                "situation_description": situation,
+                "situation_description": situation,  # Primary variant for display
+                "situation_variants": variants,  # All 3 variants for search
                 "lesson": lesson,
                 "metadata": {
                     "repo": repo,
