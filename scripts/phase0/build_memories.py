@@ -317,7 +317,6 @@ def build_memories(
 
             memory = {
                 "id": _stable_id(c.get("id", str(datetime.now().timestamp())), situation, lesson),
-                "situation_description": situation,
                 "situation_variants": variants,
                 "lesson": lesson,
                 "metadata": {

@@ -39,7 +39,6 @@ from phase0 import (
     load_memories,
     DEFAULT_MEMORIES_DIR,
     FIELD_ID,
-    FIELD_SITUATION,
     FIELD_VARIANTS,
     FIELD_LESSON,
     FIELD_METADATA,
@@ -99,10 +98,11 @@ def _row_to_memory_dict(row: sqlite3.Row, include_rank: bool = False) -> Dict[st
     except IndexError:
         variants = None
 
+    variants_list = _deserialize_json_field(variants) if variants else []
+
     memory = {
         FIELD_ID: row[FIELD_ID],
-        FIELD_SITUATION: row[FIELD_SITUATION],
-        FIELD_VARIANTS: _deserialize_json_field(variants),
+        FIELD_VARIANTS: variants_list,
         FIELD_LESSON: row[FIELD_LESSON],
         FIELD_METADATA: _deserialize_json_field(row[FIELD_METADATA]),
         FIELD_SOURCE: _deserialize_json_field(row[FIELD_SOURCE]),
@@ -142,8 +142,7 @@ def create_database(db_path: str) -> None:
         cur.execute(f"""
             CREATE TABLE memories (
                 {FIELD_ID} TEXT PRIMARY KEY,
-                {FIELD_SITUATION} TEXT NOT NULL,
-                {FIELD_VARIANTS} TEXT,
+                {FIELD_VARIANTS} TEXT NOT NULL,
                 {FIELD_LESSON} TEXT NOT NULL,
                 {FIELD_METADATA} TEXT,
                 {FIELD_SOURCE} TEXT
@@ -208,12 +207,11 @@ def insert_memories(db_path: str, memories: List[Dict[str, Any]]) -> int:
                 cur.execute(
                     f"""
                     INSERT OR REPLACE INTO memories
-                    ({FIELD_ID}, {FIELD_SITUATION}, {FIELD_VARIANTS}, {FIELD_LESSON}, {FIELD_METADATA}, {FIELD_SOURCE})
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    ({FIELD_ID}, {FIELD_VARIANTS}, {FIELD_LESSON}, {FIELD_METADATA}, {FIELD_SOURCE})
+                    VALUES (?, ?, ?, ?, ?)
                     """,
                     (
                         mem[FIELD_ID],
-                        mem[FIELD_SITUATION],
                         _serialize_json_field(mem.get(FIELD_VARIANTS)),
                         mem[FIELD_LESSON],
                         _serialize_json_field(mem.get(FIELD_METADATA)),
@@ -260,7 +258,7 @@ def get_memory_by_id(db_path: str, memory_id: str) -> Optional[Dict[str, Any]]:
 
         cur.execute(
             f"""
-            SELECT {FIELD_ID}, {FIELD_SITUATION}, {FIELD_VARIANTS}, {FIELD_LESSON},
+            SELECT {FIELD_ID}, {FIELD_VARIANTS}, {FIELD_LESSON},
                    {FIELD_METADATA}, {FIELD_SOURCE}
             FROM memories
             WHERE {FIELD_ID} = ?
@@ -303,8 +301,7 @@ def search_memories(
         List of memory dictionaries ordered by relevance (best matches first).
         Each dict contains:
             - id: Unique memory identifier
-            - situation_description: Primary variant for display
-            - situation_variants: All 3 variants (array)
+            - situation_variants: All 3 variants (array, use [0] for display)
             - lesson: Actionable guidance
             - metadata: Dict with repo, language, severity, confidence
             - source: Dict with original code review context
@@ -322,7 +319,7 @@ def search_memories(
     try:
         cur.execute(
             f"""
-            SELECT m.{FIELD_ID}, m.{FIELD_SITUATION}, m.situation_variants, m.{FIELD_LESSON},
+            SELECT m.{FIELD_ID}, m.{FIELD_VARIANTS}, m.{FIELD_LESSON},
                    m.{FIELD_METADATA}, m.{FIELD_SOURCE},
                    bm25(memories_fts) as {FIELD_RANK}
             FROM memories_fts fts
@@ -342,10 +339,10 @@ def search_memories(
                 continue
             seen_ids.add(mem_id)
 
+            variants = json.loads(row[FIELD_VARIANTS]) if row[FIELD_VARIANTS] else []
             memory = {
                 FIELD_ID: mem_id,
-                FIELD_SITUATION: row[FIELD_SITUATION],
-                "situation_variants": json.loads(row["situation_variants"]) if row["situation_variants"] else [],
+                FIELD_VARIANTS: variants,
                 FIELD_LESSON: row[FIELD_LESSON],
                 FIELD_METADATA: json.loads(row[FIELD_METADATA]) if row[FIELD_METADATA] else {},
                 FIELD_SOURCE: json.loads(row[FIELD_SOURCE]) if row[FIELD_SOURCE] else {},

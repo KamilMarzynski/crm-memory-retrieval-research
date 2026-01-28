@@ -25,7 +25,7 @@ Contains extracted memories from code reviews and the SQLite FTS5 search databas
 ```json
 {
   "id": "mem_<12-char-hash>",
-  "situation_description": "When this knowledge applies (2 sentences max)",
+  "situation_variants": ["Variant 1 (use [0] for display)", "Variant 2", "Variant 3"],
   "lesson": "Actionable imperative guidance (max 160 chars)",
   "metadata": {
     "repo": "repository-name",
@@ -59,17 +59,16 @@ Contains extracted memories from code reviews and the SQLite FTS5 search databas
 -- Main table
 CREATE TABLE memories (
     id TEXT PRIMARY KEY,
-    situation_description TEXT NOT NULL,
+    situation_variants TEXT NOT NULL,  -- JSON array of 3 variants
     lesson TEXT NOT NULL,
     metadata TEXT,  -- JSON
     source TEXT     -- JSON
 );
 
--- FTS5 virtual table for keyword search
+-- FTS5 virtual table for keyword search (indexes each variant separately)
 CREATE VIRTUAL TABLE memories_fts USING fts5(
-    situation_description,
-    content='memories',
-    content_rowid='rowid'
+    situation_variant,
+    memory_id UNINDEXED
 );
 ```
 

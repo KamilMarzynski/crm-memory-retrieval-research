@@ -207,7 +207,7 @@ def run_experiment(
                 {
                     "id": r["id"],
                     "rank": r["rank"],
-                    "situation": r["situation_description"][:100],
+                    "situation": (r["situation_variants"][0] if r["situation_variants"] else "")[:100],
                     "is_ground_truth": r["id"] in ground_truth_ids,
                 }
                 for r in results

@@ -83,7 +83,7 @@ scripts/
 
 3. **Search Database** (`scripts/phase0_sqlite_fts.py`):
    - Loads JSONL memories into SQLite with FTS5 full-text search
-   - Indexes `situation_description` field for keyword search
+   - Indexes all `situation_variants` for keyword search
    - Supports BM25 ranking
 
 4. **Test Case Generation** (`scripts/phase0_build_test_cases.py`):
@@ -103,7 +103,7 @@ scripts/
 ```json
 {
   "id": "mem_<12-char-hash>",
-  "situation_description": "When this knowledge applies",
+  "situation_variants": ["Variant 1 (use for display)", "Variant 2", "Variant 3"],
   "lesson": "Actionable imperative guidance",
   "metadata": { "repo", "file_pattern", "language", "severity", "confidence" },
   "source": { "file", "line", "code_snippet", "comment", "pr_context" }

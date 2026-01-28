@@ -25,7 +25,6 @@ DEFAULT_MEMORIES_DIR = "data/phase0/memories"
 
 # Database/memory field names (centralized to avoid magic strings)
 FIELD_ID = "id"
-FIELD_SITUATION = "situation_description"
 FIELD_VARIANTS = "situation_variants"
 FIELD_LESSON = "lesson"
 FIELD_METADATA = "metadata"
@@ -48,8 +47,7 @@ def load_memories(memories_dir: str = DEFAULT_MEMORIES_DIR) -> List[Dict[str, An
     Returns:
         List of memory dictionaries, each containing:
             - id: Unique memory identifier
-            - situation_description: When this knowledge applies
-            - situation_variants: List of 3 situation variants
+            - situation_variants: List of 3 situation variants (use [0] for display)
             - lesson: Actionable guidance
             - metadata: Dict with repo, language, severity, confidence
             - source: Dict with original code review context

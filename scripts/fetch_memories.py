@@ -33,7 +33,7 @@ def main():
 
     for i, r in enumerate(results, 1):
         print(f"\n[{i}] {r['id']} (rank: {r['rank']:.2f})")
-        print(f"    Situation: {r['situation_description']}")
+        print(f"    Situation: {r['situation_variants'][0] if r['situation_variants'] else '(none)'}")
         print(f"    Lesson: {r['lesson']}")
 
 
