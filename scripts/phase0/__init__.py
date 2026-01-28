@@ -5,7 +5,7 @@ This module contains all code specific to Phase 0 experiments, which validate
 memory retrieval using SQLite FTS5 full-text search with BM25 ranking.
 
 Modules:
-    memories: Memory loading and field constants
+    load_memories: Memory loading and field constants
     db: SQLite FTS5 database operations
     test_cases: Test case generation from raw PR data
     experiment: Retrieval experiment runner
@@ -17,7 +17,7 @@ Typical Workflow:
     4. Run experiments: uv run python scripts/phase0/experiment.py --all
 """
 
-from phase0.memories import (
+from phase0.load_memories import (
     load_memories,
     DEFAULT_MEMORIES_DIR,
     FIELD_ID,

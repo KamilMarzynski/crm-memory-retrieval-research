@@ -55,14 +55,20 @@ data/
 scripts/
 ├── common/                  # Shared utilities across all phases
 │   ├── io.py               # load_json, save_json, ensure_dir
+│   ├── load_memories.py    # Memory loading from JSONL, shared field constants
 │   └── openrouter.py       # OpenRouter LLM API client
 │
 ├── phase0/                  # Phase 0: Keyword search experiments
 │   ├── build_memories.py   # Extract memories via LLM (CLI: <file> | --all)
 │   ├── db.py               # SQLite FTS5 database (CLI: --rebuild)
-│   ├── memories.py         # Memory loading, field constants
+│   ├── load_memories.py    # Phase 0 field constants, re-exports common
 │   ├── test_cases.py       # Test case generation (CLI)
 │   └── experiment.py       # Experiment runner (CLI: <file> | --all)
+│
+├── phase1/                  # Phase 1: Vector search experiments
+│   ├── build_memories.py   # Extract memories via LLM (CLI: <file> | --all)
+│   ├── db.py               # SQLite + sqlite-vec database (CLI: --rebuild)
+│   └── load_memories.py    # Phase 1 field constants, re-exports common
 │
 ├── fetch_memories.py        # CLI: Test memory search
 └── export_review_data_to_csv.py  # CLI: Export to CSV
