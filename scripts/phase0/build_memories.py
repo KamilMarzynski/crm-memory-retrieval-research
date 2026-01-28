@@ -1,23 +1,30 @@
-import os
-import json
-import time
+"""
+Extract memories from raw code review JSON files.
+
+This script processes raw code review data using AI to extract reusable
+engineering knowledge as structured memories.
+
+Usage:
+    # Process single file
+    uv run python scripts/phase0/build_memories.py data/review_data/review_001.json
+
+    # Process all JSON files in directory
+    uv run python scripts/phase0/build_memories.py --all data/review_data
+"""
+
 import hashlib
-from pathlib import Path
+import json
+import os
+import sys
+import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-import requests
+# Add scripts directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-
-
-def _load_json(path: str) -> Dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def _ensure_dir(p: str) -> None:
-    Path(p).mkdir(parents=True, exist_ok=True)
+from common import load_json, ensure_dir, call_openrouter
 
 
 def _short_repo_name(repo_path: str) -> str:
@@ -45,32 +52,6 @@ def _confidence_map(c: str) -> float:
 def _stable_id(raw_comment_id: str, situation: str, lesson: str) -> str:
     h = hashlib.sha1((raw_comment_id + "\n" + situation + "\n" + lesson).encode("utf-8")).hexdigest()
     return f"mem_{h[:12]}"
-
-
-def _call_openrouter(
-    api_key: str,
-    model: str,
-    messages: List[Dict[str, str]],
-    temperature: float = 0.0,
-    max_tokens: int = 220,
-    timeout_s: int = 60,
-) -> str:
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost",
-        "X-Title": "memory-retrieval-research",
-    }
-    payload = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-    r = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=timeout_s)
-    r.raise_for_status()
-    data = r.json()
-    return data["choices"][0]["message"]["content"].strip()
 
 
 def _prompt_situation(context: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -122,7 +103,7 @@ def _prompt_situation(context: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
         ## Decision Process
 
         - If user_note is provided and indicates a need for domain context or business logic preservation → extract a domain-specific pattern
-        - If user_note is provided and indicates technical focus → extract a technical/abstract pattern  
+        - If user_note is provided and indicates technical focus → extract a technical/abstract pattern
         - If user_note is not provided or is ambiguous → default to technical/abstract pattern
 
           # RULES:
@@ -221,12 +202,12 @@ def build_memories(
     if not api_key:
         raise SystemExit("Missing OPENROUTER_API_KEY env var")
 
-    raw = _load_json(raw_path)
+    raw = load_json(raw_path)
     context = raw.get("context", "")
     meta = raw.get("meta", {})
     comments = raw.get("code_review_comments", [])
 
-    _ensure_dir(out_dir)
+    ensure_dir(out_dir)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_path = str(Path(out_dir) / f"memories_{Path(raw_path).stem}_{ts}.jsonl")
     reject_path = str(Path(out_dir) / f"rejected_{Path(raw_path).stem}_{ts}.jsonl")
@@ -250,14 +231,14 @@ def build_memories(
                 )
                 rejected += 1
                 continue
-            
+
             # Generate 3 semicolon-separated situation variants
-            situation_raw = _call_openrouter(
+            situation_raw = call_openrouter(
                 api_key=api_key,
                 model=model,
                 messages=_prompt_situation(context, c),
                 temperature=0.0,
-                max_tokens=600,  # Increased for 3 variants
+                max_tokens=600,
             )
 
             # Parse semicolon-separated variants
@@ -311,7 +292,7 @@ def build_memories(
 
             time.sleep(sleep_s)
 
-            lesson = _call_openrouter(
+            lesson = call_openrouter(
                 api_key=api_key,
                 model=model,
                 messages=_prompt_lesson(situation, c),
@@ -336,8 +317,8 @@ def build_memories(
 
             memory = {
                 "id": _stable_id(c.get("id", str(datetime.now().timestamp())), situation, lesson),
-                "situation_description": situation,  # Primary variant for display
-                "situation_variants": variants,  # All 3 variants for search
+                "situation_description": situation,
+                "situation_variants": variants,
                 "lesson": lesson,
                 "metadata": {
                     "repo": repo,
@@ -369,8 +350,8 @@ def build_memories(
 
             time.sleep(sleep_s)
 
-    print(f"✓ memories written: {written} -> {out_path}")
-    print(f"✓ rejected: {rejected} -> {reject_path}")
+    print(f"Memories written: {written} -> {out_path}")
+    print(f"Rejected: {rejected} -> {reject_path}")
     return out_path
 
 
@@ -383,10 +364,10 @@ if __name__ == "__main__":
         epilog="""
 Examples:
   # Process single file
-  python scripts/pre0_build_memories.py data/review_data/review_001.json
+  uv run python scripts/phase0/build_memories.py data/review_data/review_001.json
 
   # Process all JSON files in directory
-  python scripts/pre0_build_memories.py --all data/review_data
+  uv run python scripts/phase0/build_memories.py --all data/review_data
         """,
     )
     parser.add_argument(
@@ -402,7 +383,6 @@ Examples:
     args = parser.parse_args()
 
     if args.all:
-        # Process all JSON files in directory
         dir_path = Path(args.path)
         if not dir_path.is_dir():
             raise SystemExit(f"Error: {args.path} is not a directory")
@@ -422,7 +402,7 @@ Examples:
                 build_memories(str(json_file))
                 total_success += 1
             except Exception as e:
-                print(f"✗ Failed to process {json_file.name}: {e}")
+                print(f"Failed to process {json_file.name}: {e}")
                 total_failed += 1
             print()
 
@@ -430,5 +410,4 @@ Examples:
         print(f"Successfully processed: {total_success}")
         print(f"Failed: {total_failed}")
     else:
-        # Process single file
         build_memories(args.path)

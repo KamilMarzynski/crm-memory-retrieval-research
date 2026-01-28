@@ -16,22 +16,22 @@ uv sync
 uv run python scripts/export_review_data_to_csv.py
 
 # Extract memories from raw code review data (requires OPENROUTER_API_KEY)
-uv run python scripts/pre0_build_memories.py data/review_data/<file>.json
+uv run python scripts/phase0/build_memories.py data/review_data/<file>.json
 
 # Build/rebuild SQLite FTS5 search database
-uv run python scripts/phase0_sqlite_fts.py --rebuild
+uv run python scripts/phase0/db.py --rebuild
 
 # Build test cases from raw data and extracted memories
-uv run python scripts/phase0_build_test_cases.py
+uv run python scripts/phase0/test_cases.py
 
 # Test memory search
 uv run python scripts/fetch_memories.py "your search query"
 
 # Run retrieval experiment on single test case (requires OPENROUTER_API_KEY)
-uv run python scripts/phase0_experiment.py data/phase0_test_cases/<file>.json
+uv run python scripts/phase0/experiment.py data/phase0/test_cases/<file>.json
 
 # Run retrieval experiment on all test cases
-uv run python scripts/phase0_experiment.py --all
+uv run python scripts/phase0/experiment.py --all
 ```
 
 ## Data Structure
@@ -51,15 +51,22 @@ data/
 
 ## Scripts
 
-| Script | Purpose |
-|--------|---------|
-| `export_review_data_to_csv.py` | Export code review comments from JSON to CSV format |
-| `pre0_build_memories.py` | Extract memories from raw code review JSON via LLM |
-| `phase0_sqlite_fts.py` | Build SQLite FTS5 database from JSONL memories |
-| `phase0_build_test_cases.py` | Generate self-contained test cases from raw data and memories |
-| `phase0_experiment.py` | Run retrieval experiments from test cases, measure recall |
-| `fetch_memories.py` | CLI tool to test memory search |
-| `phase0_common.py` | Shared utilities for all phase0 scripts |
+```
+scripts/
+├── common/                  # Shared utilities across all phases
+│   ├── io.py               # load_json, save_json, ensure_dir
+│   └── openrouter.py       # OpenRouter LLM API client
+│
+├── phase0/                  # Phase 0: Keyword search experiments
+│   ├── build_memories.py   # Extract memories via LLM (CLI: <file> | --all)
+│   ├── db.py               # SQLite FTS5 database (CLI: --rebuild)
+│   ├── memories.py         # Memory loading, field constants
+│   ├── test_cases.py       # Test case generation (CLI)
+│   └── experiment.py       # Experiment runner (CLI: <file> | --all)
+│
+├── fetch_memories.py        # CLI: Test memory search
+└── export_review_data_to_csv.py  # CLI: Export to CSV
+```
 
 ## Architecture
 

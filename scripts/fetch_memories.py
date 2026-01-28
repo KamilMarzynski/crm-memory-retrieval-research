@@ -1,11 +1,12 @@
 """Quick CLI to test memory retrieval."""
 
-import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from phase0_common import search_memories
-from phase0_sqlite_fts import get_memory_count
+# Add scripts directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent))
+
+from phase0 import search_memories, get_memory_count
 
 DB_PATH = "data/phase0/memories/memories.db"
 

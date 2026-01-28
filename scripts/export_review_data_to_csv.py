@@ -14,17 +14,18 @@ Usage:
 import csv
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Dict, List
 
 # Add scripts directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
-from phase0_common import load_json
+
+from common import load_json
 
 # Default paths
 DEFAULT_INPUT_DIR = "data/review_data"
 DEFAULT_OUTPUT_FILE = "data/review_data_export.csv"
 
-# CSV column headers (must match import requirements)
+# CSV column headers
 CSV_HEADERS = ["context", "file", "severity", "code", "comment", "user_note"]
 
 
@@ -36,18 +37,7 @@ def extract_comments_from_pr(pr_file_path: str) -> List[Dict[str, str]]:
         pr_file_path: Path to raw PR JSON file.
 
     Returns:
-        List of dictionaries, each representing a code review comment with:
-            - context: PR context/description
-            - file: File path where comment was made
-            - severity: Comment severity (e.g., "error", "warning", "info")
-            - code: Code snippet being reviewed
-            - comment: The review comment message
-            - user_note: Optional user note providing additional context
-
-    Example:
-        >>> comments = extract_comments_from_pr("data/review_data/pr_123.json")
-        >>> len(comments)
-        5
+        List of dictionaries, each representing a code review comment.
     """
     try:
         pr_data = load_json(pr_file_path)
@@ -55,10 +45,8 @@ def extract_comments_from_pr(pr_file_path: str) -> List[Dict[str, str]]:
         print(f"Warning: Failed to load {pr_file_path}: {e}")
         return []
 
-    # Get PR context (shared across all comments from this PR)
     pr_context = pr_data.get("context", "")
 
-    # Extract all code review comments
     comments = []
     for comment_data in pr_data.get("code_review_comments", []):
         comment = {
@@ -81,29 +69,13 @@ def export_to_csv(
     """
     Export all code review comments from JSON files to CSV.
 
-    Reads all JSON files from input_dir, extracts code review comments,
-    and writes them to a CSV file with required column headers.
-
     Args:
         input_dir: Directory containing raw PR JSON files.
-                   Defaults to "data/review_data".
         output_file: Path where CSV file should be written.
-                     Defaults to "data/review_data_export.csv".
-
-    Side Effects:
-        - Creates/overwrites output CSV file
-        - Prints progress information to stdout
-
-    Example:
-        >>> export_to_csv()
-        Processing data/review_data...
-        Processed 5 JSON files
-        Exported 25 code review comments to data/review_data_export.csv
     """
     input_path = Path(input_dir)
     output_path = Path(output_file)
 
-    # Find all JSON files
     json_files = sorted(input_path.glob("*.json"))
 
     if not json_files:
@@ -112,14 +84,12 @@ def export_to_csv(
 
     print(f"Processing {input_dir}...")
 
-    # Collect all comments from all PRs
     all_comments = []
     for json_file in json_files:
         comments = extract_comments_from_pr(str(json_file))
         all_comments.extend(comments)
         print(f"  {json_file.name}: {len(comments)} comments")
 
-    # Write to CSV
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with open(output_path, "w", encoding="utf-8", newline="") as f:
@@ -127,7 +97,6 @@ def export_to_csv(
         writer.writeheader()
         writer.writerows(all_comments)
 
-    # Print summary
     print("\n" + "=" * 60)
     print("EXPORT SUMMARY")
     print("=" * 60)
@@ -144,9 +113,6 @@ def export_to_csv(
 
 
 if __name__ == "__main__":
-    import sys
-
-    # Parse command-line arguments
     if len(sys.argv) > 1 and sys.argv[1] in ["--help", "-h"]:
         print("Export Code Review Data to CSV")
         print()
@@ -164,7 +130,6 @@ if __name__ == "__main__":
         print(f"Default output: {DEFAULT_OUTPUT_FILE}")
         sys.exit(0)
 
-    # Check for custom output path
     if len(sys.argv) > 2 and sys.argv[1] == "--output":
         output_file = sys.argv[2]
         export_to_csv(output_file=output_file)
