@@ -75,42 +75,50 @@ def _build_query_generation_prompt(context: str, filtered_diff: str) -> List[Dic
     if len(filtered_diff) > MAX_DIFF_LENGTH:
         filtered_diff = filtered_diff[:MAX_DIFF_LENGTH] + "\n... (truncated)"
 
-    system = """Generate search queries to retrieve relevant code review patterns from a vector database.
+    system = """Generate search queries to retrieve relevant code review patterns from full text search database.
 
-QUERY GENERATION STRATEGY:
+        QUERY GENERATION STRATEGY:
 
-1. Identify the code structure in the diff:
-   - Is it a test file, mapper, service, validator, helper, model?
-   - What methods/functions are being changed?
+        1. Identify the code structure in the diff
+        - Is it a test file, mapper, service, validator, helper, model?
+        - What methods/functions are being changed?
 
-2. Identify technical patterns (NOT business logic):
-   - Type patterns: optional, nullable, union types, generics
-   - Logic patterns: conditionals, loops, error handling
-   - Test patterns: edge cases, coverage gaps, assertion issues
-   - API patterns: field changes, breaking changes, versioning
+        2. Identify technical patterns:
+        - Type patterns: optional, nullable, union types, generics
+        - Logic patterns: conditionals, loops, error handling
+        - Test patterns: edge cases, coverage gaps, assertion issues
+        - API patterns: field changes, breaking changes, versioning
+        - Note: Extract the pattern abstractly, but preserve domain terms if they provide important context
 
-3. Identify specific gaps or issues:
-   - What's missing? Use phrases like "missing test", "no validation", "lacks error handling"
-   - What's inconsistent? Use phrases like "handles X but not Y"
-   - What might break? Use phrases like "breaking change", "external dependency"
+        3. Identify specific gaps or issues:
+        - What's missing? Use phrases like "missing test", "no validation", "lacks error handling"
+        - What's inconsistent? Use phrases like "handles X but not Y"
+        - What might break? Use phrases like "breaking change", "external dependency"
 
-4. Generate queries that combine structure + pattern + gap:
-   - "test file optional parameter missing edge case"
-   - "mapper method undefined vs null handling"
-   - "service boolean logic missing test coverage"
+        4. Generate queries that combine structure + pattern + gap:
+        - "test file optional parameter missing edge case"
+        - "mapper method undefined vs null handling"
+        - "service boolean logic missing test coverage"
 
-QUERY RULES:
-- 4-8 words per query
-- Include code structure when relevant (test file, mapper, service)
-- Use technical terms: optional, undefined, null, nullable, edge case, union type
-- Describe gaps: "missing", "lacks", "no", "doesn't handle"
-- Avoid business domain terms (replace with generic technical terms)
-- Generate 5-8 queries from different angles
+        5. Generate keyword variations for the same concept:
+        - Use synonyms: "function" AND "method", "check" AND "validation"
+        - Use operator variations: "?." AND "optional chaining"
+        - Rephrase gaps: "missing X" AND "no X" AND "lacks X"
 
-OUTPUT: JSON array of query strings only.
+        QUERY RULES:
+        - 4-8 words per query
+        - Include code structure when relevant (test file, mapper, service)
+        - Use technical terms: optional, undefined, null, nullable, edge case, union type
+        - Describe gaps: "missing", "lacks", "no", "doesn't handle"
+        - Include domain/business terms if they appear prominently in the diff or comments (e.g., "payment", "user profile", "prescription")
+        - Mix technical and domain queries: some purely technical, some domain-specific
+        - Generate 5-8 queries with overlapping concepts but different terminology
+        - At least 2 queries should use alternative phrasings of the same core issue
 
-EXAMPLE OUTPUT:
-["test file optional parameter edge case", "mapper method undefined parent object", "missing test completely undefined input", "optional object test coverage nested vs parent", "test suite nullable parameter all scenarios"]"""
+        OUTPUT: JSON array of query strings only.
+
+        EXAMPLE OUTPUT:
+        ["test file optional parameter edge case", "payment mapper undefined parent object", "missing test completely undefined input", "optional payment object test coverage", "test suite nullable parameter all scenarios", "function accepting optional type untested", "payment refund method Type | undefined", "service optional chaining nested payment data"]"""
 
     user = f"""PR CONTEXT:
 {context}

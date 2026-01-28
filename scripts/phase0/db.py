@@ -150,7 +150,7 @@ def create_database(db_path: str) -> None:
         """)
 
         # Create FTS5 virtual table for full-text search on situation variants
-        cur.execute(f"""
+        cur.execute("""
             CREATE VIRTUAL TABLE memories_fts USING fts5(
                 situation_variant,
                 memory_id UNINDEXED
