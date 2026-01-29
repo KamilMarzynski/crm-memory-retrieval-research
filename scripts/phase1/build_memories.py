@@ -26,6 +26,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from common import load_json, ensure_dir, call_openrouter
 
+# Prompt version constants for tracking
+MEMORY_PROMPT_VERSION_V1 = "situation_v1.0"
+MEMORY_PROMPT_VERSION_V2 = "situation_v2.0"
+TAGS_PROMPT_VERSION = "tags_v2.0"
+
+# Current active version
+ACTIVE_MEMORY_PROMPT_VERSION = MEMORY_PROMPT_VERSION_V2
+
 
 def _short_repo_name(repo_path: str) -> str:
     if not repo_path:
@@ -56,7 +64,13 @@ def _stable_id(raw_comment_id: str, situation: str, lesson: str) -> str:
     return f"mem_{h[:12]}"
 
 
-def _prompt_situation(context: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
+def _prompt_situation_v1(context: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
+    """
+    Extract situation description from code review comment (original prompt).
+
+    Version: 1.0
+    Output length: 40-450 chars (character-based validation)
+    """
     code = (c.get("code_snippet") or "").strip()
     user_note = (c.get("user_note") or "").strip()
     file = c.get("file", "")
@@ -138,6 +152,101 @@ def _prompt_situation(context: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
+def _prompt_situation_v2(context: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
+    """
+    Extract searchable situation description from code review comment.
+
+    Version: 2.0
+    Output length: 25-60 words (aligned with query length for vector similarity)
+
+    Key improvements over v1:
+    - Aligned length to 25-60 words (was 40-120) to match query length
+    - Relaxed rigid structure - elements can appear in natural order
+    - Focus on technical patterns, structure context, and gap identification
+    """
+    code = (c.get("code_snippet") or "").strip()
+    user_note = (c.get("user_note") or "").strip()
+    file = c.get("file", "")
+    severity = c.get("severity", "info")
+    comment = c.get("message", "")
+
+    system = """You extract reusable code review patterns for a vector search database.
+
+Your output will be retrieved by semantic similarity, so focus on:
+1. Technical patterns (optional chaining, null checks, conditional logic)
+2. Code structure context (test file, mapper, service, decorator)
+3. The gap or issue (missing, lacks, inconsistent, redundant)
+
+Write 1-2 sentences (25-60 words) that naturally incorporate these elements.
+The elements can appear in any order that reads naturally.
+
+Do NOT include:
+- Solutions, advice, or "should" statements
+- File names, variable names, or code identifiers
+- Generic statements without specific patterns
+
+GOOD EXAMPLES:
+"Test file for mapper method accepting optional object. Missing test case for completely undefined parent object; only tests undefined nested properties."
+"Service method using optional chaining on nested properties. Early return may skip downstream validation when parent object is null."
+"Decorator applying configuration at multiple levels. Session setting duplicated between decorator parameter and server-level config."
+
+BAD EXAMPLES:
+"The UserMapper.ts file has a bug." (includes file name, too vague)
+"Add null check before accessing user.profile." (includes solution)
+"Be careful with optional properties." (too vague, no pattern)
+"Authentication middleware needs better error handling." (domain term without pattern context)"""
+
+    user = f"""FILE: {file}
+SEVERITY: {severity}
+
+CODE:
+{code[:800] if code else "(none)"}
+
+REVIEW COMMENT:
+{comment}
+
+{f"ADDITIONAL CONTEXT: {user_note}" if user_note else ""}
+
+Extract the reusable pattern (25-60 words). Output ONLY the description text."""
+
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+## Implemented for future use, not currently called
+def _prompt_searchable_tags(situation: str, code_snippet: str) -> List[Dict[str, str]]:
+    """
+    Generate searchable tags from a memory situation.
+
+    Version: 2.0
+    Output: 3-5 tags, 2-4 words each
+    """
+    system = """Extract short searchable tags from code review patterns.
+
+Each tag should be 2-4 words that someone might search for.
+
+TAG CATEGORIES:
+1. Structure tags: "test file", "mapper method", "service class", "decorator", "repository"
+2. Pattern tags: "optional chaining", "null check", "conditional logic", "nested object", "enum handling"
+3. Gap tags: "missing test", "inconsistent handling", "redundant check", "copy-paste error", "no validation"
+
+OUTPUT: JSON array of 3-5 strings.
+
+EXAMPLES:
+["test file", "optional nested object", "missing edge case"]
+["mapper method", "conditional logic", "boolean flag", "untested branch"]
+["decorator", "configuration levels", "redundant setting"]"""
+
+    user = f"""SITUATION:
+{situation}
+
+CODE CONTEXT:
+{code_snippet[:500] if code_snippet else "(none)"}
+
+Extract 3-5 searchable tags. Output ONLY a JSON array."""
+
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
 def _prompt_lesson(situation: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
     comment = c.get("message", "")
     rationale = (c.get("rationale") or "").strip()
@@ -166,7 +275,8 @@ def _prompt_lesson(situation: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def _validate_situation(text: str) -> Tuple[bool, str]:
+def _validate_situation_v1(text: str) -> Tuple[bool, str]:
+    """Validation for v1 prompts (40-450 chars)."""
     t = (text or "").strip()
     if len(t) < 40:
         return False, "situation_too_short"
@@ -175,6 +285,76 @@ def _validate_situation(text: str) -> Tuple[bool, str]:
     if not t.endswith((".", "!", "?")):
         return True, "ok_no_punct"
     return True, "ok"
+
+
+def _validate_situation_v2(text: str) -> Tuple[bool, str]:
+    """
+    Validation for v2 prompts (25-60 words, aligned with query length).
+
+    Word count validation ensures memory and query lengths are similar
+    for better vector similarity matching.
+    """
+    t = (text or "").strip()
+    word_count = len(t.split())
+
+    if word_count < 20:
+        return False, f"situation_too_short_{word_count}_words"
+    if word_count > 70:
+        return False, f"situation_too_long_{word_count}_words"
+    if not t.endswith((".", "!", "?")):
+        return True, "ok_no_punct"
+    return True, "ok"
+
+
+def validate_memory_searchability(situation: str) -> Tuple[bool, List[str]]:
+    """
+    Validate that a situation description will be searchable.
+
+    Checks for presence of structure terms, pattern terms, and gap terms.
+    Returns (is_valid, list_of_issues).
+    """
+    issues = []
+
+    # Check length (aligned with query length)
+    word_count = len(situation.split())
+    if word_count < 20:
+        issues.append(f"Too short ({word_count} words, need 20+)")
+    if word_count > 70:
+        issues.append(f"Too long ({word_count} words, max 70)")
+
+    # Check for structure terms
+    structure_terms = [
+        "test", "mapper", "service", "decorator", "method",
+        "class", "function", "file", "repository", "controller",
+        "validator", "handler", "filter", "factory"
+    ]
+    if not any(term in situation.lower() for term in structure_terms):
+        issues.append("Missing code structure term")
+
+    # Check for pattern terms
+    pattern_terms = [
+        "optional", "null", "undefined", "conditional", "nested",
+        "chaining", "check", "validation", "logic", "handling",
+        "enum", "array", "object", "property", "parameter"
+    ]
+    if not any(term in situation.lower() for term in pattern_terms):
+        issues.append("Missing technical pattern term")
+
+    # Check for gap terms
+    gap_terms = [
+        "missing", "lacks", "inconsistent", "redundant", "contradicts",
+        "without", "no ", "incorrect", "mismatch", "error", "duplicate",
+        "unused", "untested", "incomplete"
+    ]
+    if not any(term in situation.lower() for term in gap_terms):
+        issues.append("Missing gap/issue term")
+
+    # Check for forbidden content
+    forbidden = ["should", "need to", "must", "ensure", "always"]
+    if any(word in situation.lower() for word in forbidden):
+        issues.append("Contains advice/solution language")
+
+    return (len(issues) == 0, issues)
 
 
 def _validate_lesson(text: str) -> Tuple[bool, str]:
@@ -193,6 +373,7 @@ def build_memories(
     out_dir: str = "data/phase1/memories",
     model: str = "anthropic/claude-haiku-4.5",
     sleep_s: float = 0.25,
+    prompt_version: str = "v2",
 ) -> str:
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
@@ -235,17 +416,27 @@ def build_memories(
                 rejected += 1
                 continue
 
+            # Select prompt and validation based on version
+            if prompt_version == "v2":
+                prompt_fn = _prompt_situation_v2
+                validate_fn = _validate_situation_v2
+                version_tag = MEMORY_PROMPT_VERSION_V2
+            else:
+                prompt_fn = _prompt_situation_v1
+                validate_fn = _validate_situation_v1
+                version_tag = MEMORY_PROMPT_VERSION_V1
+
             situation = call_openrouter(
                 api_key=api_key,
                 model=model,
-                messages=_prompt_situation(context, c),
+                messages=prompt_fn(context, c),
                 temperature=0.0,
                 max_tokens=600,
             )
 
-            # Validate each variant individually
+            # Validate situation
             all_valid = True
-            ok_s, reason_s = _validate_situation(situation)
+            ok_s, reason_s = validate_fn(situation)
             if reason_s == "ok_no_punct":
                 situation = situation.rstrip() + "."
             elif not ok_s:
@@ -311,7 +502,8 @@ def build_memories(
                     "tags": [],
                     "severity": c.get("severity", "info"),
                     "confidence": original_conf,
-                    "author": "pre0-openrouter",
+                    "author": "phase1-openrouter",
+                    "prompt_version": version_tag,
                     "source_comment_id": c.get("id"),
                     "status": c.get("status", None),
                 },
@@ -365,6 +557,12 @@ Examples:
         action="store_true",
         help="Process all .json files in the specified directory",
     )
+    parser.add_argument(
+        "--prompt-version",
+        choices=["v1", "v2"],
+        default="v2",
+        help="Prompt version to use (default: v2 with aligned lengths)",
+    )
 
     args = parser.parse_args()
 
@@ -385,7 +583,7 @@ Examples:
         for i, json_file in enumerate(json_files, 1):
             print(f"[{i}/{len(json_files)}] Processing: {json_file.name}")
             try:
-                build_memories(str(json_file))
+                build_memories(str(json_file), prompt_version=args.prompt_version)
                 total_success += 1
             except Exception as e:
                 print(f"Failed to process {json_file.name}: {e}")
@@ -396,4 +594,4 @@ Examples:
         print(f"Successfully processed: {total_success}")
         print(f"Failed: {total_failed}")
     else:
-        build_memories(args.path)
+        build_memories(args.path, prompt_version=args.prompt_version)

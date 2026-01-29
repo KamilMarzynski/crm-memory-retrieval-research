@@ -234,6 +234,129 @@ def get_memory_count(db_path: str) -> int:
         return cur.fetchone()[0]
 
 
+def get_sample_memories(db_path: str, limit: int = 5) -> List[Dict[str, Any]]:
+    """
+    Get a sample of memories from the database (for inspection/debugging).
+
+    Args:
+        db_path: Path to SQLite database file.
+        limit: Number of memories to retrieve.
+
+    Returns:
+        List of memory dictionaries.
+    """
+    with get_db_connection(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute(
+            f"""
+            SELECT {FIELD_ID}, {FIELD_SITUATION}, {FIELD_LESSON},
+                   {FIELD_METADATA}, {FIELD_SOURCE}
+            FROM memories
+            LIMIT ?
+            """,
+            (limit,),
+        )
+
+        results = []
+        for row in cur.fetchall():
+            results.append({
+                FIELD_ID: row[FIELD_ID],
+                FIELD_SITUATION: row[FIELD_SITUATION],
+                FIELD_LESSON: row[FIELD_LESSON],
+                FIELD_METADATA: _deserialize_json_field(row[FIELD_METADATA]),
+                FIELD_SOURCE: _deserialize_json_field(row[FIELD_SOURCE]),
+            })
+
+        return results
+
+
+def get_random_sample_memories(db_path: str, n: int = 5) -> List[Dict[str, Any]]:
+    """
+    Get random sample of memories to include in query generation prompts.
+
+    This grounds the LLM in actual database vocabulary, improving semantic
+    alignment between generated queries and stored memories.
+
+    Args:
+        db_path: Path to SQLite database file.
+        n: Number of random memories to retrieve.
+
+    Returns:
+        List of memory dictionaries with id, situation_description, and lesson.
+    """
+    with get_db_connection(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute(
+            f"""
+            SELECT {FIELD_ID}, {FIELD_SITUATION}, {FIELD_LESSON}
+            FROM memories
+            ORDER BY RANDOM()
+            LIMIT ?
+            """,
+            (n,),
+        )
+
+        return [
+            {
+                FIELD_ID: row[FIELD_ID],
+                FIELD_SITUATION: row[FIELD_SITUATION],
+                FIELD_LESSON: row[FIELD_LESSON],
+            }
+            for row in cur.fetchall()
+        ]
+
+
+def get_confidence_from_distance(distance: float) -> str:
+    """
+    Convert cosine distance to confidence label.
+
+    Calibrated for mxbai-embed-large with cosine distance.
+    Uses embedding distance instead of expensive LLM calls.
+
+    Args:
+        distance: Cosine distance from vector search (lower = more similar).
+
+    Returns:
+        Confidence label: "high", "medium", "low", or "very_low".
+    """
+    if distance < 0.5:
+        return "high"      # Strong semantic match
+    elif distance < 0.8:
+        return "medium"    # Moderate match, likely relevant
+    elif distance < 1.2:
+        return "low"       # Weak match, may be relevant
+    else:
+        return "very_low"  # Poor match, likely noise
+
+
+def filter_results_by_confidence(
+    results: List[Dict[str, Any]],
+    min_confidence: str = "low",
+) -> List[Dict[str, Any]]:
+    """
+    Filter search results by minimum confidence threshold.
+
+    Args:
+        results: List of search result dictionaries with 'distance' field.
+        min_confidence: Minimum confidence level to include ("high", "medium",
+            "low", "very_low").
+
+    Returns:
+        Filtered list of results meeting the confidence threshold.
+    """
+    confidence_order = ["very_low", "low", "medium", "high"]
+    min_idx = confidence_order.index(min_confidence)
+
+    return [
+        r for r in results
+        if confidence_order.index(get_confidence_from_distance(r[FIELD_DISTANCE])) >= min_idx
+    ]
+
+
 def get_memory_by_id(db_path: str, memory_id: str) -> Optional[Dict[str, Any]]:
     """
     Retrieve a specific memory by its unique identifier.
