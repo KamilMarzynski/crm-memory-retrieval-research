@@ -388,19 +388,68 @@ def rebuild_database(
     print(f"Inserted {count} memories into database")
 
 
+def _print_usage() -> None:
+    """Print CLI usage information."""
+    print("SQLite FTS5 Memory Search Database")
+    print()
+    print("Usage:")
+    print("  uv run python scripts/phase0/db.py --rebuild")
+    print("  uv run python scripts/phase0/db.py --search <query> [--limit N]")
+    print()
+    print("Commands:")
+    print("  --rebuild          Rebuild database from memories/*.jsonl files")
+    print("  --search <query>   Search memories using FTS5 full-text search")
+    print()
+    print("Options:")
+    print("  --limit N          Maximum results to return (default: 10)")
+    print()
+    print("Configuration:")
+    print(f"  Database location: {DEFAULT_DB_PATH}")
+    print(f"  Source JSONL files: {DEFAULT_MEMORIES_DIR}/memories_*.jsonl")
+
+
+def _run_search(query: str, limit: int = 10) -> None:
+    """Run a search and print results."""
+    print(f"Searching for: {query}")
+    print(f"Limit: {limit}")
+    print()
+
+    results = search_memories(DEFAULT_DB_PATH, query, limit=limit)
+
+    if not results:
+        print("No results found.")
+        return
+
+    print(f"Found {len(results)} results:\n")
+    for i, mem in enumerate(results, 1):
+        situation = mem[FIELD_VARIANTS][0] if mem[FIELD_VARIANTS] else "(none)"
+        print(f"[{i}] {mem[FIELD_ID]} (rank: {mem[FIELD_RANK]:.2f})")
+        print(f"    Situation: {situation}")
+        print(f"    Lesson: {mem[FIELD_LESSON]}")
+        print()
+
+
 if __name__ == "__main__":
-    if len(sys.argv) < 2 or sys.argv[1] != "--rebuild":
-        print("SQLite FTS5 Memory Search Database Builder")
-        print()
-        print("Usage:")
-        print("  uv run python scripts/phase0/db.py --rebuild")
-        print()
-        print("Description:")
-        print("  Rebuilds the FTS5 search database from memories/*.jsonl files.")
-        print("  This is a destructive operation that replaces the existing database.")
-        print()
-        print(f"  Database location: {DEFAULT_DB_PATH}")
-        print(f"  Source JSONL files: {DEFAULT_MEMORIES_DIR}/memories_*.jsonl")
+    if len(sys.argv) < 2:
+        _print_usage()
         sys.exit(1)
 
-    rebuild_database()
+    if sys.argv[1] == "--rebuild":
+        rebuild_database()
+    elif sys.argv[1] == "--search":
+        if len(sys.argv) < 3:
+            print("Error: --search requires a query argument")
+            sys.exit(1)
+        query = sys.argv[2]
+        limit = 10
+        if "--limit" in sys.argv:
+            try:
+                limit_idx = sys.argv.index("--limit")
+                limit = int(sys.argv[limit_idx + 1])
+            except (IndexError, ValueError):
+                print("Error: --limit requires a numeric argument")
+                sys.exit(1)
+        _run_search(query, limit)
+    else:
+        _print_usage()
+        sys.exit(1)

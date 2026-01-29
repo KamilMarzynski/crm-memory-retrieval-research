@@ -31,7 +31,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
-import requests
+import ollama
 import sqlite_vec
 
 # Add scripts directory to path for imports
@@ -49,9 +49,12 @@ from phase1.load_memories import (
 )
 
 # Ollama configuration
-OLLAMA_BASE_URL = ""
+OLLAMA_HOST = None  # Set to custom host URL (e.g., "http://localhost:11434") or None for default
 OLLAMA_MODEL = "mxbai-embed-large"
 VECTOR_DIMENSIONS = 1024
+
+# Initialize Ollama client (uses default host if OLLAMA_HOST is None)
+_ollama_client = ollama.Client(host=OLLAMA_HOST) if OLLAMA_HOST else None
 
 # Default database path
 DEFAULT_DB_PATH = "data/phase1/memories/memories.db"
@@ -73,28 +76,11 @@ def get_embedding(text: str) -> List[float]:
         List of floats representing the embedding vector.
 
     Raises:
-        RuntimeError: If Ollama API call fails.
-        ValueError: If OLLAMA_BASE_URL is not configured.
+        ollama.ResponseError: If Ollama API call fails.
     """
-    if not OLLAMA_BASE_URL:
-        raise ValueError(
-            "OLLAMA_BASE_URL is not configured. "
-            "Set it in scripts/phase1/db.py before running."
-        )
-
-    resp = requests.post(
-        f"{OLLAMA_BASE_URL}/api/embed",
-        json={"model": OLLAMA_MODEL, "input": text},
-        timeout=30,
-    )
-
-    if resp.status_code != 200:
-        raise RuntimeError(
-            f"Ollama API error {resp.status_code}: {resp.text}"
-        )
-
-    data = resp.json()
-    return data["embeddings"][0]
+    client = _ollama_client or ollama
+    response = client.embed(model=OLLAMA_MODEL, input=text)
+    return response["embeddings"][0]
 
 
 def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
@@ -226,7 +212,7 @@ def insert_memories(db_path: str, memories: List[Dict[str, Any]]) -> int:
                 )
 
                 inserted += 1
-            except (KeyError, sqlite3.Error, RuntimeError, ValueError) as e:
+            except (KeyError, sqlite3.Error, ollama.ResponseError) as e:
                 print(f"  Warning: Skipping memory {mem_id}: {e}")
 
     return inserted
@@ -374,23 +360,70 @@ def rebuild_database(
     print(f"Inserted {count} memories into database")
 
 
+def _print_usage() -> None:
+    """Print CLI usage information."""
+    print("SQLite-vec Memory Search Database")
+    print()
+    print("Usage:")
+    print("  uv run python scripts/phase1/db.py --rebuild")
+    print("  uv run python scripts/phase1/db.py --search <query> [--limit N]")
+    print()
+    print("Commands:")
+    print("  --rebuild          Rebuild database from memories/*.jsonl files")
+    print("  --search <query>   Search memories using vector similarity")
+    print()
+    print("Options:")
+    print("  --limit N          Maximum results to return (default: 10)")
+    print()
+    print("Configuration:")
+    print(f"  Database location: {DEFAULT_DB_PATH}")
+    print(f"  Source JSONL files: {DEFAULT_MEMORIES_DIR}/memories_*.jsonl")
+    print(f"  Ollama host: {OLLAMA_HOST or '(default)'}")
+    print(f"  Embedding model: {OLLAMA_MODEL}")
+    print(f"  Vector dimensions: {VECTOR_DIMENSIONS}")
+
+
+def _run_search(query: str, limit: int = 10) -> None:
+    """Run a search and print results."""
+    print(f"Searching for: {query}")
+    print(f"Limit: {limit}")
+    print()
+
+    results = search_memories(DEFAULT_DB_PATH, query, limit=limit)
+
+    if not results:
+        print("No results found.")
+        return
+
+    print(f"Found {len(results)} results:\n")
+    for i, mem in enumerate(results, 1):
+        print(f"[{i}] {mem[FIELD_ID]} (distance: {mem[FIELD_DISTANCE]:.4f})")
+        print(f"    Situation: {mem[FIELD_SITUATION]}")
+        print(f"    Lesson: {mem[FIELD_LESSON]}")
+        print()
+
+
 if __name__ == "__main__":
-    if len(sys.argv) < 2 or sys.argv[1] != "--rebuild":
-        print("SQLite-vec Memory Search Database Builder")
-        print()
-        print("Usage:")
-        print("  uv run python scripts/phase1/db.py --rebuild")
-        print()
-        print("Description:")
-        print("  Rebuilds the vector search database from memories/*.jsonl files.")
-        print("  Generates embeddings via Ollama and stores them in sqlite-vec.")
-        print("  This is a destructive operation that replaces the existing database.")
-        print()
-        print(f"  Database location: {DEFAULT_DB_PATH}")
-        print(f"  Source JSONL files: {DEFAULT_MEMORIES_DIR}/memories_*.jsonl")
-        print(f"  Ollama URL: {OLLAMA_BASE_URL or '(not configured)'}")
-        print(f"  Embedding model: {OLLAMA_MODEL}")
-        print(f"  Vector dimensions: {VECTOR_DIMENSIONS}")
+    if len(sys.argv) < 2:
+        _print_usage()
         sys.exit(1)
 
-    rebuild_database()
+    if sys.argv[1] == "--rebuild":
+        rebuild_database()
+    elif sys.argv[1] == "--search":
+        if len(sys.argv) < 3:
+            print("Error: --search requires a query argument")
+            sys.exit(1)
+        query = sys.argv[2]
+        limit = 10
+        if "--limit" in sys.argv:
+            try:
+                limit_idx = sys.argv.index("--limit")
+                limit = int(sys.argv[limit_idx + 1])
+            except (IndexError, ValueError):
+                print("Error: --limit requires a numeric argument")
+                sys.exit(1)
+        _run_search(query, limit)
+    else:
+        _print_usage()
+        sys.exit(1)
