@@ -50,7 +50,9 @@ def _confidence_map(c: str) -> float:
 
 
 def _stable_id(raw_comment_id: str, situation: str, lesson: str) -> str:
-    h = hashlib.sha1((raw_comment_id + "\n" + situation + "\n" + lesson).encode("utf-8")).hexdigest()
+    h = hashlib.sha1(
+        (raw_comment_id + "\n" + situation + "\n" + lesson).encode("utf-8")
+    ).hexdigest()
     return f"mem_{h[:12]}"
 
 
@@ -66,8 +68,7 @@ def _prompt_situation(context: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
         "Your output will be used for retrieval. Be specific and concrete."
     )
 
-    user = (
-        f"""
+    user = f"""
         PR CONTEXT:
 
         {context}
@@ -113,18 +114,18 @@ def _prompt_situation(context: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
           - NEVER suggest code changes - it's not your role
           - Use technical terms (undefined, null, optional, edge case) over domain terms
           - Make it retrievable: think 'would this match similar situations in different domains?'
-          - Output ONLY the pattern description as 3 semicolon-separated sentences (no meta text, no headers, no markdown)
+          - Output ONLY pattern description text (no meta text, no headers, no markdown)
 
          # GOOD EXAMPLES FOR TECHNICAL/ABSTRACT PATTERNS:
-         - Test file for mapper method accepting optional object (Type | undefined); Missing test case for fully undefined parent object. Only tests undefined nested properties.
+         - Test file for mapper method accepting optional object (Type | undefined). Missing test case for fully undefined parent object. Only tests undefined nested properties.
          - API mapper class renaming response fields. Fields consumed by external clients.
          - Service method using optional chaining on nested objects. Early returns might skip validation.
          - Validator helper processing optional config object. null vs undefined handled differently.
          - Missing tests for all possible conditional logic. Multiple if-else branches untested.
          # GOOD EXAMPLES FOR DOMAIN-SPECIFIC PATTERNS:
          - When calculating patient medication dosages in the pharmacy system. Verifying prescription object exists.
-         - When updating SpecificModelMapper property called `foo` to `bar`; Database column mapping changed.
-        - Payment refund processing service; Transaction settlement status check missing.
+         - When updating SpecificModelMapper property called `foo` to `bar`. Database column mapping changed.
+         - Payment refund processing service. Transaction settlement status check missing.
 
          # BAD EXAMPLES:
          - Be careful when changing code to handle edge cases. [too generic, no specifics]
@@ -133,7 +134,6 @@ def _prompt_situation(context: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
          - This code has a bug in the validation logic. [too vague, no pattern description]
          - Optional chaining. Nested objects. [too terse, lacks context]
          - The reviewOptionalChainingIssue function in UserService.ts needs null checks before accessing user.profile.settings.theme. [too specific, includes variable names and file names]."""
-    )
 
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -142,20 +142,17 @@ def _prompt_lesson(situation: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
     comment = c.get("message", "")
     rationale = (c.get("rationale") or "").strip()
 
-    system = (
-        """You convert code review feedback into a single actionable lesson.
+    system = """You convert code review feedback into a single actionable lesson.
         Keep it concise and imperative."""
-    )
 
-    user = (
-        f"""SITUATION:
+    user = f"""SITUATION:
         {situation}
 
         COMMENT:
         {comment}
 
         RATIONALE (optional):
-        {rationale if rationale else '(none)'}
+        {rationale if rationale else "(none)"}
         TASK:
         Write ONE actionable lesson (imperative), max 160 characters.
         GOOD EXAMPLES:
@@ -165,7 +162,6 @@ def _prompt_lesson(situation: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
         - One sentence.
         - Starts with an imperative cue: Always / Never / Ensure / Avoid / Verify / Check / Prefer.
         - Output ONLY the lesson text."""
-    )
 
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -213,18 +209,25 @@ def build_memories(
     reject_path = str(Path(out_dir) / f"rejected_{Path(raw_path).stem}_{ts}.jsonl")
 
     repo = _short_repo_name(meta.get("repoPath", ""))
-    pr_context = f"{meta.get('sourceBranch','?')} → {meta.get('targetBranch','?')}"
+    pr_context = f"{meta.get('sourceBranch', '?')} → {meta.get('targetBranch', '?')}"
     gathered_at = meta.get("gatheredAt", "")
 
     written = 0
     rejected = 0
 
-    with open(out_path, "w", encoding="utf-8") as out_f, open(reject_path, "w", encoding="utf-8") as rej_f:
+    with (
+        open(out_path, "w", encoding="utf-8") as out_f,
+        open(reject_path, "w", encoding="utf-8") as rej_f,
+    ):
         for c in comments:
-            if c.get("status") == 'rejected':
+            if c.get("status") == "rejected":
                 rej_f.write(
                     json.dumps(
-                        {"comment_id": c.get("id"), "stage": "status", "reason": "comment_rejected"},
+                        {
+                            "comment_id": c.get("id"),
+                            "stage": "status",
+                            "reason": "comment_rejected",
+                        },
                         ensure_ascii=False,
                     )
                     + "\n"
@@ -251,7 +254,7 @@ def build_memories(
                         {
                             "comment_id": c.get("id"),
                             "stage": "situation",
-                            "reason": f"variant_{i}_{reason_s}",
+                            "reason": reason_s,
                             "text": situation,
                         },
                         ensure_ascii=False,
@@ -280,7 +283,12 @@ def build_memories(
             if not ok_l:
                 rej_f.write(
                     json.dumps(
-                        {"comment_id": c.get("id"), "stage": "lesson", "reason": reason_l, "text": lesson},
+                        {
+                            "comment_id": c.get("id"),
+                            "stage": "lesson",
+                            "reason": reason_l,
+                            "text": lesson,
+                        },
                         ensure_ascii=False,
                     )
                     + "\n"
@@ -291,7 +299,9 @@ def build_memories(
             original_conf = _confidence_map(c.get("confidence", "medium"))
 
             memory = {
-                "id": _stable_id(c.get("id", str(datetime.now().timestamp())), situation, lesson),
+                "id": _stable_id(
+                    c.get("id", str(datetime.now().timestamp())), situation, lesson
+                ),
                 "situation_description": situation,
                 "lesson": lesson,
                 "metadata": {
@@ -315,7 +325,9 @@ def build_memories(
                     "verifiedBy": c.get("verifiedBy", None),
                     "pr_context": pr_context,
                     "gathered_at": gathered_at,
-                    "raw_context_hash": hashlib.sha1(context.encode("utf-8")).hexdigest()[:12],
+                    "raw_context_hash": hashlib.sha1(
+                        context.encode("utf-8")
+                    ).hexdigest()[:12],
                 },
             }
 
