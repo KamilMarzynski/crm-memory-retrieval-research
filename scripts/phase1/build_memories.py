@@ -212,41 +212,6 @@ Extract the reusable pattern (25-60 words). Output ONLY the description text."""
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-## Implemented for future use, not currently called
-def _prompt_searchable_tags(situation: str, code_snippet: str) -> List[Dict[str, str]]:
-    """
-    Generate searchable tags from a memory situation.
-
-    Version: 2.0
-    Output: 3-5 tags, 2-4 words each
-    """
-    system = """Extract short searchable tags from code review patterns.
-
-Each tag should be 2-4 words that someone might search for.
-
-TAG CATEGORIES:
-1. Structure tags: "test file", "mapper method", "service class", "decorator", "repository"
-2. Pattern tags: "optional chaining", "null check", "conditional logic", "nested object", "enum handling"
-3. Gap tags: "missing test", "inconsistent handling", "redundant check", "copy-paste error", "no validation"
-
-OUTPUT: JSON array of 3-5 strings.
-
-EXAMPLES:
-["test file", "optional nested object", "missing edge case"]
-["mapper method", "conditional logic", "boolean flag", "untested branch"]
-["decorator", "configuration levels", "redundant setting"]"""
-
-    user = f"""SITUATION:
-{situation}
-
-CODE CONTEXT:
-{code_snippet[:500] if code_snippet else "(none)"}
-
-Extract 3-5 searchable tags. Output ONLY a JSON array."""
-
-    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
-
-
 def _prompt_lesson(situation: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
     comment = c.get("message", "")
     rationale = (c.get("rationale") or "").strip()
