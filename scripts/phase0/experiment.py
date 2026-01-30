@@ -36,7 +36,7 @@ from typing import Any, Dict, List, Set
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from common import load_json, save_json, call_openrouter, OPENROUTER_API_KEY_ENV
-from phase0 import search_memories, DEFAULT_DB_PATH
+from phase0 import search_memories, DEFAULT_DB_PATH, FIELD_VARIANTS, get_random_sample_memories
 
 # Model configuration
 DEFAULT_MODEL = "anthropic/claude-sonnet-4.5"
@@ -59,7 +59,7 @@ DEFAULT_RESULTS_DIR = "data/phase0/results"
 DEFAULT_SLEEP_BETWEEN_EXPERIMENTS = 1.0
 
 
-def _build_query_generation_prompt(context: str, filtered_diff: str) -> List[Dict[str, str]]:
+def _build_query_generation_prompt(context: str, filtered_diff: str, sample_memories: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     """
     Build prompt for LLM to generate search queries from PR context.
 
@@ -75,50 +75,42 @@ def _build_query_generation_prompt(context: str, filtered_diff: str) -> List[Dic
     if len(filtered_diff) > MAX_DIFF_LENGTH:
         filtered_diff = filtered_diff[:MAX_DIFF_LENGTH] + "\n... (truncated)"
 
-    system = """Generate search queries to retrieve relevant code review patterns from full text search database.
 
-        QUERY GENERATION STRATEGY:
+    # Format actual memory examples (critical for semantic alignment)
+    memory_examples = "\n".join([
+        f"- \"{m[FIELD_VARIANTS][0]}\""
+        for m in sample_memories[:5]
+    ])
 
-        1. Identify the code structure in the diff
-        - Is it a test file, mapper, service, validator, helper, model?
-        - What methods/functions are being changed?
+    system = f"""You generate search queries for a code review memory database.
 
-        2. Identify technical patterns:
-        - Type patterns: optional, nullable, union types, generics
-        - Logic patterns: conditionals, loops, error handling
-        - Test patterns: edge cases, coverage gaps, assertion issues
-        - API patterns: field changes, breaking changes, versioning
-        - Note: Extract the pattern abstractly, but preserve domain terms if they provide important context
+The database contains patterns like these REAL EXAMPLES:
+{memory_examples}
 
-        3. Identify specific gaps or issues:
-        - What's missing? Use phrases like "missing test", "no validation", "lacks error handling"
-        - What's inconsistent? Use phrases like "handles X but not Y"
-        - What might break? Use phrases like "breaking change", "external dependency"
+Your queries MUST sound like these entries to achieve semantic match.
 
-        4. Generate queries that combine structure + pattern + gap:
-        - "test file optional parameter missing edge case"
-        - "mapper method undefined vs null handling"
-        - "service boolean logic missing test coverage"
+QUERY RULES:
+- Each query: 20-50 words (1-2 sentences)
+- Describe a pattern/situation, NOT a solution
+- Include: code structure + technical pattern + gap/issue
+- NO file names, function names, or identifiers
+- NO advice verbs: "should", "need to", "ensure", "avoid"
 
-        5. Generate keyword variations for the same concept:
-        - Use synonyms: "function" AND "method", "check" AND "validation"
-        - Use operator variations: "?." AND "optional chaining"
-        - Rephrase gaps: "missing X" AND "no X" AND "lacks X"
+VOCABULARY GUIDANCE:
+Prefer structural/technical terms over domain-specific ones.
+Instead of naming WHAT the code does (authentication, payment, pagination),
+describe HOW it does it (strategy pattern, numeric parameters, nested object access).
 
-        QUERY RULES:
-        - 4-8 words per query
-        - Include code structure when relevant (test file, mapper, service)
-        - Use technical terms: optional, undefined, null, nullable, edge case, union type
-        - Describe gaps: "missing", "lacks", "no", "doesn't handle"
-        - Include domain/business terms if they appear prominently in the diff or comments (e.g., "payment", "user profile", "prescription")
-        - Mix technical and domain queries: some purely technical, some domain-specific
-        - Generate 5-8 queries with overlapping concepts but different terminology
-        - At least 2 queries should use alternative phrasings of the same core issue
+Domain terms ARE acceptable when they add clarity that technical terms cannot capture.
+Example: "pagination boundary" may be clearer than "numeric range limit".
 
-        OUTPUT: JSON array of query strings only.
+SELF-CHECK before including each query:
+1. Does it describe a pattern (not a solution)?
+2. Could it plausibly exist in the example database above?
+3. Is it 20-50 words?
+Remove any queries that fail these checks.
 
-        EXAMPLE OUTPUT:
-        ["test file optional parameter edge case", "payment mapper undefined parent object", "missing test completely undefined input", "optional payment object test coverage", "test suite nullable parameter all scenarios", "function accepting optional type untested", "payment refund method Type | undefined", "service optional chaining nested payment data"]"""
+Generate 6-10 diverse queries covering different aspects of the diff."""
 
     user = f"""PR CONTEXT:
 {context}
@@ -126,7 +118,8 @@ def _build_query_generation_prompt(context: str, filtered_diff: str) -> List[Dic
 CODE DIFF:
 {filtered_diff}
 
-Generate search queries to retrieve relevant engineering memories. Return ONLY a JSON array of query strings."""
+Generate queries that would retrieve relevant memories.
+Output ONLY a JSON array of strings."""
 
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -194,11 +187,14 @@ def run_experiment(
     print(f"Diff stats: {diff_stats.get('original_length', 0)} -> {diff_stats.get('filtered_length', 0)} chars")
     print(f"Ground truth memories: {len(ground_truth_ids)}")
 
+    sample_memories = get_random_sample_memories(db_path)
+
     print(f"Generating queries via {model}...")
-    prompt = _build_query_generation_prompt(context, filtered_diff)
+    prompt = _build_query_generation_prompt(context, filtered_diff, sample_memories)
     response = call_openrouter(api_key, model, prompt, temperature=DEFAULT_TEMPERATURE, max_tokens=DEFAULT_MAX_TOKENS)
     queries = _parse_queries_from_response(response)
     print(f"Generated {len(queries)} queries")
+    print(queries)
 
     all_retrieved_ids: Set[str] = set()
     query_results = []

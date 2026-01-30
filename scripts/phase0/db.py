@@ -114,6 +114,44 @@ def _row_to_memory_dict(row: sqlite3.Row, include_rank: bool = False) -> Dict[st
     return memory
 
 
+def get_random_sample_memories(db_path: str, n: int = 5) -> List[Dict[str, Any]]:
+    """
+    Get random sample of memories to include in query generation prompts.
+
+    This grounds the LLM in actual database vocabulary, improving semantic
+    alignment between generated queries and stored memories.
+
+    Args:
+        db_path: Path to SQLite database file.
+        n: Number of random memories to retrieve.
+
+    Returns:
+        List of memory dictionaries with id, situation_description, and lesson.
+    """
+    with get_db_connection(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute(
+            f"""
+            SELECT {FIELD_ID}, {FIELD_VARIANTS}, {FIELD_LESSON}
+            FROM memories
+            ORDER BY RANDOM()
+            LIMIT ?
+            """,
+            (n,),
+        )
+
+        return [
+            {
+                FIELD_ID: row[FIELD_ID],
+                FIELD_VARIANTS: json.loads(row[FIELD_VARIANTS]),
+                FIELD_LESSON: row[FIELD_LESSON],
+            }
+            for row in cur.fetchall()
+        ]
+
+
 def create_database(db_path: str) -> None:
     """
     Create SQLite database with memories table and FTS5 full-text search index.
@@ -273,6 +311,13 @@ def get_memory_by_id(db_path: str, memory_id: str) -> Optional[Dict[str, Any]]:
         return _row_to_memory_dict(row, include_rank=False)
 
 
+def _escape_fts5_query(query: str) -> str:
+    """Escape a query string for safe use with FTS5 MATCH."""
+    query = query.replace('"', '')
+    tokens = query.split()
+    return " ".join(f'"{token}"' for token in tokens if token)
+
+
 def search_memories(
     db_path: str = DEFAULT_DB_PATH,
     query: str = "",
@@ -327,7 +372,7 @@ def search_memories(
             WHERE memories_fts MATCH ?
             ORDER BY {FIELD_RANK}
             """,
-            (query,),
+            (_escape_fts5_query(query),),
         )
 
         # Deduplicate: keep first occurrence of each memory (best rank)

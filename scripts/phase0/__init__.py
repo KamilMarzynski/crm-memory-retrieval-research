@@ -31,6 +31,7 @@ from phase0.db import (
     search_memories,
     get_memory_count,
     get_memory_by_id,
+    get_random_sample_memories,
     DEFAULT_DB_PATH,
 )
 
@@ -48,5 +49,6 @@ __all__ = [
     "search_memories",
     "get_memory_count",
     "get_memory_by_id",
+    "get_random_sample_memories",
     "DEFAULT_DB_PATH",
 ]

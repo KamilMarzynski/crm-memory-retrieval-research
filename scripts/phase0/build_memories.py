@@ -54,86 +54,56 @@ def _stable_id(raw_comment_id: str, situation: str, lesson: str) -> str:
     return f"mem_{h[:12]}"
 
 
-def _prompt_situation(context: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
+def _prompt_situation(c: Dict[str, Any]) -> List[Dict[str, str]]:
+    """
+    Extract searchable situation description from code review comment.
+
+    Output length: 25-60 words per variant (aligned with query length for vector similarity)
+    """
     code = (c.get("code_snippet") or "").strip()
     user_note = (c.get("user_note") or "").strip()
     file = c.get("file", "")
     severity = c.get("severity", "info")
     comment = c.get("message", "")
 
-    system = (
-        "You extract reusable engineering knowledge from code reviews. "
-        "Your output will be used for retrieval. Be specific and concrete."
-    )
+    system = """You extract reusable code review patterns for a vector search database.
 
-    user = (
-        f"""
-        PR CONTEXT:
+Your output will be retrieved by semantic similarity, so focus on:
+1. Technical patterns (optional chaining, null checks, conditional logic)
+2. Code structure context (test file, mapper, service, decorator)
+3. The gap or issue (missing, lacks, inconsistent, redundant)
 
-        {context}
+Write 3 sentences (25-60 words each) that naturally incorporate these elements. Sentences must be separated by semicolons (;).
+The elements can appear in any order that reads naturally.
 
-        FILE: {file}
-        SEVERITY: {severity}
-        CODE SNIPPET:
+Do NOT include:
+- Solutions, advice, or "should" statements
+- File names, variable names, or code identifiers
+- Generic statements without specific patterns
 
-        {code}
+GOOD EXAMPLES:
+"Test file for mapper method accepting optional object; Missing test case for completely undefined parent object; Only tests undefined nested properties."
+"Service method using optional chaining on nested properties; Early return may skip downstream validation when parent object is null."
+"Decorator applying configuration at multiple levels; Session setting duplicated between decorator parameter and server-level config."
 
-        CODE REVIEW COMMENT:
-        {comment}
+BAD EXAMPLES:
+"The UserMapper.ts file has a bug." (includes file name, too vague)
+"Add null check before accessing user.profile." (includes solution)
+"Be careful with optional properties." (too vague, no pattern)
+"Authentication middleware needs better error handling." (domain term without pattern context)"""
 
-        USER NOTE (optional)
-        {user_note}
+    user = f"""FILE: {file}
+SEVERITY: {severity}
 
-        Note: The user_note field is optional but critically important when provided. It gives you explicit guidance on what type of pattern to extract and how abstract or domain-specific your output should be.
+CODE:
+{code[:800] if code else "(none)"}
 
-        # Your Task
+REVIEW COMMENT:
+{comment}
 
-        Extract a reusable pattern from this code review comment that will be easy to retrieve by full text search query. Sentences should be short and concise.
+{f"ADDITIONAL CONTEXT: {user_note}" if user_note else ""}
 
-        ## Understanding Abstraction Levels
-
-        You need to determine the appropriate abstraction level for your output:
-
-        **Technical/Abstract Pattern** - Focus on code structure and technical concerns, avoiding business domain terms
-        - Example: "Method using optional chaining on nested objects. Redundant optional chaining."
-
-        **Domain-Specific Pattern** - Include business context when it's essential to the pattern
-        - Example: "Payment processing service handling refund requests,."
-
-        ## Decision Process
-
-        - If user_note is provided and indicates a need for domain context or business logic preservation → extract a domain-specific pattern
-        - If user_note is provided and indicates technical focus → extract a technical/abstract pattern
-        - If user_note is not provided or is ambiguous → default to technical/abstract pattern
-
-          # RULES:
-          - Be very CONCISE. Generate exactly 3 SHORT sentences separated by semicolons (;).
-          - Focus on the PATTERN/SITUATION
-          - Describe WHEN this applies (what code pattern triggers this)
-          - NEVER suggest code changes - it's not your role
-          - Use technical terms (undefined, null, optional, edge case) over domain terms
-          - Make it retrievable: think 'would this match similar situations in different domains?'
-          - Output ONLY the pattern description as 3 semicolon-separated sentences (no meta text, no headers, no markdown)
-
-         # GOOD EXAMPLES FOR TECHNICAL/ABSTRACT PATTERNS:
-         - Test file for mapper method accepting optional object (Type | undefined); Missing test case for fully undefined parent object; Only tests undefined nested properties.
-         - API mapper class renaming response fields; Fields consumed by external clients; Breaking change risk.
-         - Service method using optional chaining on nested objects; Early returns might skip validation; Chained ?. operator.
-         - Validator helper processing optional config object; null vs undefined handled differently; Optional parameter validation.
-         - Missing tests for all possible conditional logic; Multiple if-else branches untested; Edge case coverage incomplete.
-         # GOOD EXAMPLES FOR DOMAIN-SPECIFIC PATTERNS:
-         - When calculating patient medication dosages in the pharmacy system; Verifying prescription object exists; Drug interaction fields accessed.
-         - When updating SpecificModelMapper property called `foo` to `bar`; Database column mapping changed; Migration script needed.
-        - Payment refund processing service; Transaction settlement status check missing; Partial refund validation.
-
-         # BAD EXAMPLES:
-         - Be careful when changing code to handle edge cases. [too generic, no specifics]
-         - API mapper class renaming response fields. Remember about updating tests. [suggests solution]
-         - Service method using optional chaining on nested objects. Check if object is required. [suggests solution]
-         - This code has a bug in the validation logic. [too vague, no pattern description]
-         - Optional chaining; Nested objects; Validation. [too terse, lacks context]
-         - The reviewOptionalChainingIssue function in UserService.ts needs null checks before accessing user.profile.settings.theme. [too specific, includes variable names and file names]."""
-    )
+Extract only 3 semicolon-separated sentences. Output ONLY the description text."""
 
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -236,7 +206,7 @@ def build_memories(
             situation_raw = call_openrouter(
                 api_key=api_key,
                 model=model,
-                messages=_prompt_situation(context, c),
+                messages=_prompt_situation(c),
                 temperature=0.0,
                 max_tokens=600,
             )
