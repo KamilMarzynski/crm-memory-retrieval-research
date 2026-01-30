@@ -270,58 +270,6 @@ def _validate_situation_v2(text: str) -> Tuple[bool, str]:
         return True, "ok_no_punct"
     return True, "ok"
 
-
-def validate_memory_searchability(situation: str) -> Tuple[bool, List[str]]:
-    """
-    Validate that a situation description will be searchable.
-
-    Checks for presence of structure terms, pattern terms, and gap terms.
-    Returns (is_valid, list_of_issues).
-    """
-    issues = []
-
-    # Check length (aligned with query length)
-    word_count = len(situation.split())
-    if word_count < 20:
-        issues.append(f"Too short ({word_count} words, need 20+)")
-    if word_count > 70:
-        issues.append(f"Too long ({word_count} words, max 70)")
-
-    # Check for structure terms
-    structure_terms = [
-        "test", "mapper", "service", "decorator", "method",
-        "class", "function", "file", "repository", "controller",
-        "validator", "handler", "filter", "factory"
-    ]
-    if not any(term in situation.lower() for term in structure_terms):
-        issues.append("Missing code structure term")
-
-    # Check for pattern terms
-    pattern_terms = [
-        "optional", "null", "undefined", "conditional", "nested",
-        "chaining", "check", "validation", "logic", "handling",
-        "enum", "array", "object", "property", "parameter"
-    ]
-    if not any(term in situation.lower() for term in pattern_terms):
-        issues.append("Missing technical pattern term")
-
-    # Check for gap terms
-    gap_terms = [
-        "missing", "lacks", "inconsistent", "redundant", "contradicts",
-        "without", "no ", "incorrect", "mismatch", "error", "duplicate",
-        "unused", "untested", "incomplete"
-    ]
-    if not any(term in situation.lower() for term in gap_terms):
-        issues.append("Missing gap/issue term")
-
-    # Check for forbidden content
-    forbidden = ["should", "need to", "must", "ensure", "always"]
-    if any(word in situation.lower() for word in forbidden):
-        issues.append("Contains advice/solution language")
-
-    return (len(issues) == 0, issues)
-
-
 def _validate_lesson(text: str) -> Tuple[bool, str]:
     t = (text or "").strip()
     if len(t) < 20:
