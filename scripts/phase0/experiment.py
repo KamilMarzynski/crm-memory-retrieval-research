@@ -222,8 +222,15 @@ def run_experiment(
             ],
         })
 
+    # Calculate metrics
     retrieved_ground_truth = all_retrieved_ids & ground_truth_ids
-    recall = len(retrieved_ground_truth) / len(ground_truth_ids) if ground_truth_ids else 0.0
+    recall = (
+        len(retrieved_ground_truth) / len(ground_truth_ids) if ground_truth_ids else 0.0
+    )
+    precision = (
+        len(retrieved_ground_truth) / len(all_retrieved_ids) if all_retrieved_ids else 0.0
+    )
+    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
 
     results = {
         "experiment_id": f"exp_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
@@ -242,6 +249,8 @@ def run_experiment(
             "total_unique_retrieved": len(all_retrieved_ids),
             "ground_truth_retrieved": len(retrieved_ground_truth),
             "recall": round(recall, 4),
+            "precision": round(precision, 4),
+            "f1": round(f1, 4),
         },
         "retrieved_ground_truth_ids": sorted(list(retrieved_ground_truth)),
         "missed_ground_truth_ids": sorted(list(ground_truth_ids - all_retrieved_ids)),
@@ -261,7 +270,10 @@ def run_experiment(
     print(f"Ground truth memories: {len(ground_truth_ids)}")
     print(f"Retrieved (unique): {len(all_retrieved_ids)}")
     print(f"Ground truth retrieved: {len(retrieved_ground_truth)}")
-    print(f"\nRECALL: {recall:.1%}")
+    print("\nMETRICS:")
+    print(f"  Recall:    {recall:.1%}")
+    print(f"  Precision: {precision:.1%}")
+    print(f"  F1 Score:  {f1:.3f}")
     print("=" * 60)
 
     if ground_truth_ids - all_retrieved_ids:
@@ -321,13 +333,18 @@ def run_all_experiments(
     successful = [r for r in all_results if "metrics" in r]
     if successful:
         avg_recall = sum(r["metrics"]["recall"] for r in successful) / len(successful)
+        avg_precision = sum(r["metrics"]["precision"] for r in successful) / len(successful)
+        avg_f1 = sum(r["metrics"]["f1"] for r in successful) / len(successful)
         total_gt = sum(r["ground_truth"]["count"] for r in successful)
         total_retrieved = sum(r["metrics"]["ground_truth_retrieved"] for r in successful)
 
         print(f"Experiments run: {len(successful)}")
         print(f"Total ground truth memories: {total_gt}")
         print(f"Total retrieved: {total_retrieved}")
-        print(f"Average recall: {avg_recall:.1%}")
+        print("\nAGGREGATE METRICS:")
+        print(f"  Average recall:    {avg_recall:.1%}")
+        print(f"  Average precision: {avg_precision:.1%}")
+        print(f"  Average F1:        {avg_f1:.3f}")
     else:
         print("No successful experiments")
 

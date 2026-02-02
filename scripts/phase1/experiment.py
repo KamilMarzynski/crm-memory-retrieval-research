@@ -34,7 +34,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Set
+from typing import Any, Callable, Dict, List, Set 
 
 # Add scripts directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -356,11 +356,13 @@ def run_experiment(
     ground_truth_ids = set(test_case.get("ground_truth_memory_ids", []))
     diff_stats = test_case.get("diff_stats", {})
 
+    ground_truth_len = len(ground_truth_ids)
+
     print(f"Test case: {test_case.get('test_case_id', 'unknown')}")
     print(
         f"Diff stats: {diff_stats.get('original_length', 0)} -> {diff_stats.get('filtered_length', 0)} chars"
     )
-    print(f"Ground truth memories: {len(ground_truth_ids)}")
+    print(f"Ground truth memories: {ground_truth_len}")
 
     # Select prompt version and parser
     parser: Callable[[str], List[str]]
@@ -421,12 +423,13 @@ def run_experiment(
     # Calculate metrics
     retrieved_ground_truth_ids = all_retrieved_ids & ground_truth_ids
     retrieved_ground_truth_len = len(retrieved_ground_truth_ids)
-    ground_truth_len = len(ground_truth_ids)
+    all_retrieved_len = len(all_retrieved_ids)
+
     recall = (
         retrieved_ground_truth_len / ground_truth_len if ground_truth_ids else 0.0
     )
     precision = (
-        retrieved_ground_truth_len / ground_truth_len if all_retrieved_ids else 0.0
+        retrieved_ground_truth_len / all_retrieved_len if all_retrieved_ids else 0.0
     )
     f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
 
