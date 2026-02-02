@@ -19,20 +19,16 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Optional, Tuple
 
 # Add scripts directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from common import load_json, ensure_dir, call_openrouter
+from common.prompts import load_prompt
 
-# Prompt version constants for tracking
-MEMORY_PROMPT_VERSION_V1 = "situation_v1.0"
-MEMORY_PROMPT_VERSION_V2 = "situation_v2.0"
-TAGS_PROMPT_VERSION = "tags_v2.0"
-
-# Current active version
-ACTIVE_MEMORY_PROMPT_VERSION = MEMORY_PROMPT_VERSION_V2
+# Phase 1 prompts directory
+_PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 
 def _short_repo_name(repo_path: str) -> str:
@@ -62,182 +58,6 @@ def _stable_id(raw_comment_id: str, situation: str, lesson: str) -> str:
         (raw_comment_id + "\n" + situation + "\n" + lesson).encode("utf-8")
     ).hexdigest()
     return f"mem_{h[:12]}"
-
-
-def _prompt_situation_v1(context: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
-    """
-    Extract situation description from code review comment (original prompt).
-
-    Version: 1.0
-    Output length: 40-450 chars (character-based validation)
-    """
-    code = (c.get("code_snippet") or "").strip()
-    user_note = (c.get("user_note") or "").strip()
-    file = c.get("file", "")
-    severity = c.get("severity", "info")
-    comment = c.get("message", "")
-
-    system = (
-        "You extract reusable engineering knowledge from code reviews. "
-        "Your output will be used for retrieval. Be specific and concrete."
-    )
-
-    user = f"""
-        PR CONTEXT:
-
-        {context}
-
-        FILE: {file}
-        SEVERITY: {severity}
-        CODE SNIPPET:
-
-        {code}
-
-        CODE REVIEW COMMENT:
-        {comment}
-
-        USER NOTE (optional)
-        {user_note}
-
-        Note: The user_note field is optional but critically important when provided. It gives you explicit guidance on what type of pattern to extract and how abstract or domain-specific your output should be.
-
-        # Your Task
-
-        Extract a reusable pattern from this code review comment that will be easy to retrieve by full text search query. Sentences should be short and concise.
-
-        ## Understanding Abstraction Levels
-
-        You need to determine the appropriate abstraction level for your output:
-
-        **Technical/Abstract Pattern** - Focus on code structure and technical concerns, avoiding business domain terms
-        - Example: "Method using optional chaining on nested objects. Redundant optional chaining."
-
-        **Domain-Specific Pattern** - Include business context when it's essential to the pattern
-        - Example: "Payment processing service handling refund requests,."
-
-        ## Decision Process
-
-        - If user_note is provided and indicates a need for domain context or business logic preservation → extract a domain-specific pattern
-        - If user_note is provided and indicates technical focus → extract a technical/abstract pattern
-        - If user_note is not provided or is ambiguous → default to technical/abstract pattern
-
-          # RULES:
-          - Be very CONCISE. Generate 1-2 sentences. 
-          - Focus on the PATTERN/SITUATION
-          - Describe WHEN this applies (what code pattern triggers this)
-          - NEVER suggest code changes - it's not your role
-          - Use technical terms (undefined, null, optional, edge case) over domain terms
-          - Make it retrievable: think 'would this match similar situations in different domains?'
-          - Output ONLY pattern description text (no meta text, no headers, no markdown)
-
-         # GOOD EXAMPLES FOR TECHNICAL/ABSTRACT PATTERNS:
-         - Test file for mapper method accepting optional object (Type | undefined). Missing test case for fully undefined parent object. Only tests undefined nested properties.
-         - API mapper class renaming response fields. Fields consumed by external clients.
-         - Service method using optional chaining on nested objects. Early returns might skip validation.
-         - Validator helper processing optional config object. null vs undefined handled differently.
-         - Missing tests for all possible conditional logic. Multiple if-else branches untested.
-         # GOOD EXAMPLES FOR DOMAIN-SPECIFIC PATTERNS:
-         - When calculating patient medication dosages in the pharmacy system. Verifying prescription object exists.
-         - When updating SpecificModelMapper property called `foo` to `bar`. Database column mapping changed.
-         - Payment refund processing service. Transaction settlement status check missing.
-
-         # BAD EXAMPLES:
-         - Be careful when changing code to handle edge cases. [too generic, no specifics]
-         - API mapper class renaming response fields. Remember about updating tests. [suggests solution]
-         - Service method using optional chaining on nested objects. Check if object is required. [suggests solution]
-         - This code has a bug in the validation logic. [too vague, no pattern description]
-         - Optional chaining. Nested objects. [too terse, lacks context]
-         - The reviewOptionalChainingIssue function in UserService.ts needs null checks before accessing user.profile.settings.theme. [too specific, includes variable names and file names]."""
-
-    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
-
-
-def _prompt_situation_v2(context: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
-    """
-    Extract searchable situation description from code review comment.
-
-    Version: 2.0
-    Output length: 25-60 words (aligned with query length for vector similarity)
-
-    Key improvements over v1:
-    - Aligned length to 25-60 words (was 40-120) to match query length
-    - Relaxed rigid structure - elements can appear in natural order
-    - Focus on technical patterns, structure context, and gap identification
-    """
-    code = (c.get("code_snippet") or "").strip()
-    user_note = (c.get("user_note") or "").strip()
-    file = c.get("file", "")
-    severity = c.get("severity", "info")
-    comment = c.get("message", "")
-
-    system = """You extract reusable code review patterns for a vector search database.
-
-Your output will be retrieved by semantic similarity, so focus on:
-1. Technical patterns (optional chaining, null checks, conditional logic)
-2. Code structure context (test file, mapper, service, decorator)
-3. The gap or issue (missing, lacks, inconsistent, redundant)
-
-Write 1-2 sentences (25-60 words) that naturally incorporate these elements.
-The elements can appear in any order that reads naturally.
-
-Do NOT include:
-- Solutions, advice, or "should" statements
-- File names, variable names, or code identifiers
-- Generic statements without specific patterns
-
-GOOD EXAMPLES:
-"Test file for mapper method accepting optional object. Missing test case for completely undefined parent object; only tests undefined nested properties."
-"Service method using optional chaining on nested properties. Early return may skip downstream validation when parent object is null."
-"Decorator applying configuration at multiple levels. Session setting duplicated between decorator parameter and server-level config."
-
-BAD EXAMPLES:
-"The UserMapper.ts file has a bug." (includes file name, too vague)
-"Add null check before accessing user.profile." (includes solution)
-"Be careful with optional properties." (too vague, no pattern)
-"Authentication middleware needs better error handling." (domain term without pattern context)"""
-
-    user = f"""FILE: {file}
-SEVERITY: {severity}
-
-CODE:
-{code[:800] if code else "(none)"}
-
-REVIEW COMMENT:
-{comment}
-
-{f"ADDITIONAL CONTEXT: {user_note}" if user_note else ""}
-
-Extract the reusable pattern (25-60 words). Output ONLY the description text."""
-
-    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
-
-
-def _prompt_lesson(situation: str, c: Dict[str, Any]) -> List[Dict[str, str]]:
-    comment = c.get("message", "")
-    rationale = (c.get("rationale") or "").strip()
-
-    system = """You convert code review feedback into a single actionable lesson.
-        Keep it concise and imperative."""
-
-    user = f"""SITUATION:
-        {situation}
-
-        COMMENT:
-        {comment}
-
-        RATIONALE (optional):
-        {rationale if rationale else "(none)"}
-        TASK:
-        Write ONE actionable lesson (imperative), max 160 characters.
-        GOOD EXAMPLES:
-        - Always add a deprecation period when renaming API fields to avoid breaking clients.
-        - Avoid mutating reduce accumulators; return a new object to keep merging logic immutable.
-        RULES:
-        - One sentence.
-        - Starts with an imperative cue: Always / Never / Ensure / Avoid / Verify / Check / Prefer.
-        - Output ONLY the lesson text."""
-
-    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
 def _validate_situation_v1(text: str) -> Tuple[bool, str]:
@@ -281,12 +101,19 @@ def _validate_lesson(text: str) -> Tuple[bool, str]:
     return True, "ok"
 
 
+# Map prompt versions to their situation validators
+_SITUATION_VALIDATORS = {
+    "1.0.0": _validate_situation_v1,
+    "2.0.0": _validate_situation_v2,
+}
+
+
 def build_memories(
     raw_path: str,
     out_dir: str = "data/phase1/memories",
     model: str = "anthropic/claude-haiku-4.5",
     sleep_s: float = 0.25,
-    prompt_version: str = "v2",
+    prompt_version: Optional[str] = None,
 ) -> str:
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
@@ -305,6 +132,16 @@ def build_memories(
     repo = _short_repo_name(meta.get("repoPath", ""))
     pr_context = f"{meta.get('sourceBranch', '?')} → {meta.get('targetBranch', '?')}"
     gathered_at = meta.get("gatheredAt", "")
+
+    # Load prompts
+    situation_prompt = load_prompt("memory-situation", version=prompt_version, prompts_dir=_PROMPTS_DIR)
+    lesson_prompt = load_prompt("memory-lesson", prompts_dir=_PROMPTS_DIR)
+
+    # Select validator: use version-specific if available, else latest
+    validate_fn = _SITUATION_VALIDATORS.get(
+        situation_prompt.version,
+        max(_SITUATION_VALIDATORS.values(), key=lambda f: f.__name__),
+    )
 
     written = 0
     rejected = 0
@@ -329,20 +166,23 @@ def build_memories(
                 rejected += 1
                 continue
 
-            # Select prompt and validation based on version
-            if prompt_version == "v2":
-                prompt_fn = _prompt_situation_v2
-                validate_fn = _validate_situation_v2
-                version_tag = MEMORY_PROMPT_VERSION_V2
-            else:
-                prompt_fn = _prompt_situation_v1
-                validate_fn = _validate_situation_v1
-                version_tag = MEMORY_PROMPT_VERSION_V1
+            # Pre-compute template variables
+            code = (c.get("code_snippet") or "").strip()
+            user_note = (c.get("user_note") or "").strip()
+            additional_context = f"ADDITIONAL CONTEXT: {user_note}" if user_note else ""
 
             situation = call_openrouter(
                 api_key=api_key,
                 model=model,
-                messages=prompt_fn(context, c),
+                messages=situation_prompt.render(
+                    context=context,
+                    file=c.get("file", ""),
+                    severity=c.get("severity", "info"),
+                    code=code[:800] if code else "(none)",
+                    comment=c.get("message", ""),
+                    user_note=user_note,
+                    additional_context=additional_context,
+                ),
                 temperature=0.0,
                 max_tokens=600,
             )
@@ -374,10 +214,15 @@ def build_memories(
 
             time.sleep(sleep_s)
 
+            rationale = (c.get("rationale") or "").strip()
             lesson = call_openrouter(
                 api_key=api_key,
                 model=model,
-                messages=_prompt_lesson(situation, c),
+                messages=lesson_prompt.render(
+                    situation=situation,
+                    comment=c.get("message", ""),
+                    rationale=rationale if rationale else "(none)",
+                ),
                 temperature=0.0,
                 max_tokens=120,
             )
@@ -416,7 +261,7 @@ def build_memories(
                     "severity": c.get("severity", "info"),
                     "confidence": original_conf,
                     "author": "phase1-openrouter",
-                    "prompt_version": version_tag,
+                    "prompt_version": situation_prompt.version_tag,
                     "source_comment_id": c.get("id"),
                     "status": c.get("status", None),
                 },
@@ -472,9 +317,8 @@ Examples:
     )
     parser.add_argument(
         "--prompt-version",
-        choices=["v1", "v2"],
-        default="v2",
-        help="Prompt version to use (default: v2 with aligned lengths)",
+        default=None,
+        help="Prompt semver to use (e.g. '2.0.0'). Defaults to latest.",
     )
 
     args = parser.parse_args()
