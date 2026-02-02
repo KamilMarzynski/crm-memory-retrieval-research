@@ -62,8 +62,8 @@ TARGET_QUERY_WORDS_MIN = 20
 TARGET_QUERY_WORDS_MAX = 50
 
 # Search configuration
-DEFAULT_SEARCH_LIMIT = 5
-MAX_DISTANCE_THRESHOLD = 2.0
+DEFAULT_SEARCH_LIMIT = 10
+MAX_DISTANCE_THRESHOLD = 1.1
 
 # Default paths
 DEFAULT_TEST_CASES_DIR = "data/phase1/test_cases"
@@ -418,18 +418,16 @@ def run_experiment(
             }
         )
 
-    retrieved_ground_truth = all_retrieved_ids & ground_truth_ids
+    # Calculate metrics
+    retrieved_ground_truth_ids = all_retrieved_ids & ground_truth_ids
+    retrieved_ground_truth_len = len(retrieved_ground_truth_ids)
+    ground_truth_len = len(ground_truth_ids)
     recall = (
-        len(retrieved_ground_truth) / len(ground_truth_ids) if ground_truth_ids else 0.0
+        retrieved_ground_truth_len / ground_truth_len if ground_truth_ids else 0.0
     )
-
-    # Calculate precision and F1
-    total_retrieved = sum(len(qr["results"]) for qr in query_results)
-    total_ground_truth_hits = sum(
-        sum(1 for r in qr["results"] if r["is_ground_truth"])
-        for qr in query_results
+    precision = (
+        retrieved_ground_truth_len / ground_truth_len if all_retrieved_ids else 0.0
     )
-    precision = total_ground_truth_hits / total_retrieved if total_retrieved > 0 else 0.0
     f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
 
     # Analyze per-query performance
@@ -451,15 +449,13 @@ def run_experiment(
         "metrics": {
             "total_queries": len(queries),
             "total_unique_retrieved": len(all_retrieved_ids),
-            "ground_truth_retrieved": len(retrieved_ground_truth),
-            "total_results": total_retrieved,
-            "total_ground_truth_hits": total_ground_truth_hits,
+            "ground_truth_retrieved": len(retrieved_ground_truth_ids),
             "recall": round(recall, 4),
             "precision": round(precision, 4),
             "f1": round(f1, 4),
         },
         "query_analysis": query_analysis,
-        "retrieved_ground_truth_ids": sorted(list(retrieved_ground_truth)),
+        "retrieved_ground_truth_ids": sorted(list(retrieved_ground_truth_ids)),
         "missed_ground_truth_ids": sorted(list(ground_truth_ids - all_retrieved_ids)),
     }
 
@@ -485,7 +481,7 @@ def run_experiment(
     print(f"Avg query length: {query_analysis['avg_word_count']:.1f} words")
     print(f"Ground truth memories: {len(ground_truth_ids)}")
     print(f"Retrieved (unique): {len(all_retrieved_ids)}")
-    print(f"Ground truth retrieved: {len(retrieved_ground_truth)}")
+    print(f"Ground truth retrieved: {len(retrieved_ground_truth_ids)}")
     print("\nMETRICS:")
     print(f"  Recall:    {recall:.1%}")
     print(f"  Precision: {precision:.1%}")
