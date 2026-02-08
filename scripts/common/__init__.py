@@ -29,6 +29,7 @@ from common.runs import (
     RunMetadata,
     PipelineStageStatus,
     PHASE1,
+    PHASE2,
     create_run,
     get_latest_run,
     get_run,

@@ -48,6 +48,25 @@ uv run python scripts/phase1/experiment.py --all --run-id run_20260208_143022
 
 # Test memory search
 uv run python scripts/fetch_memories.py "your search query"
+
+# === Phase 2: Vector Search + Reranking ===
+# Reuses Phase 1's memories, database, and test cases
+# Adds cross-encoder reranking (bge-reranker-v2-m3) after vector search
+
+# Run all experiments (creates new Phase 2 run, uses latest Phase 1 run)
+uv run python scripts/phase2/experiment.py --all
+
+# Use specific Phase 1 run
+uv run python scripts/phase2/experiment.py --all --phase1-run-id run_20260208_143022
+
+# Custom reranking parameters
+uv run python scripts/phase2/experiment.py --all --rerank-top-n 5 --search-limit 20
+
+# Test reranker standalone
+uv run python scripts/phase2/reranker.py --test "async error handling" --top-n 4
+
+# List available test cases (from Phase 1)
+uv run python scripts/phase2/test_cases.py
 ```
 
 ## Data Structure
@@ -63,20 +82,26 @@ data/
 │   ├── test_cases/       # Self-contained test cases for experiments
 │   │   └── *.json        # One test case per PR (filtered diff + ground truth IDs)
 │   └── results/          # Experiment results (JSON)
-└── phase1/               # Phase 1: Vector search experiments
-    └── runs/             # Run isolation: each pipeline execution is isolated
-        ├── run_20260208_143022/  # Timestamp-based run ID
-        │   ├── run.json          # Run metadata and pipeline status
-        │   ├── memories/         # Extracted memories for this run
-        │   │   ├── memories_*.jsonl
-        │   │   ├── rejected_*.jsonl
-        │   │   └── memories.db   # Vector search database (sqlite-vec)
-        │   ├── test_cases/       # Test cases for this run
-        │   │   └── *.json
-        │   └── results/          # Experiment results for this run
-        │       └── results_*.json
-        └── run_20260209_101530/  # Another run (outputs isolated)
-            └── ...
+├── phase1/               # Phase 1: Vector search experiments
+│   └── runs/             # Run isolation: each pipeline execution is isolated
+│       ├── run_20260208_143022/  # Timestamp-based run ID
+│       │   ├── run.json          # Run metadata and pipeline status
+│       │   ├── memories/         # Extracted memories for this run
+│       │   │   ├── memories_*.jsonl
+│       │   │   ├── rejected_*.jsonl
+│       │   │   └── memories.db   # Vector search database (sqlite-vec)
+│       │   ├── test_cases/       # Test cases for this run
+│       │   │   └── *.json
+│       │   └── results/          # Experiment results for this run
+│       │       └── results_*.json
+│       └── run_20260209_101530/  # Another run (outputs isolated)
+│           └── ...
+└── phase2/               # Phase 2: Vector search + reranking experiments
+    └── runs/             # Run isolation (results only; reuses Phase 1 DB/test cases)
+        └── run_20260210_091500/
+            ├── run.json          # Includes phase1_run_id reference
+            └── results/
+                └── results_*.json
 ```
 
 ## Scripts
@@ -104,15 +129,21 @@ scripts/
 │   ├── test_cases.py       # Test case generation (CLI: --run-id)
 │   └── experiment.py       # Experiment runner (CLI: --all, --run-id)
 │
+├── phase2/                  # Phase 2: Vector search + reranking
+│   ├── reranker.py         # Cross-encoder reranker (bge-reranker-v2-m3)
+│   ├── load_memories.py    # Phase 2 field constants (re-exports Phase 1 + rerank_score)
+│   ├── test_cases.py       # Test case path resolution (from Phase 1 runs)
+│   └── experiment.py       # Experiment runner (CLI: --all, --phase1-run-id, --rerank-top-n)
+│
 ├── fetch_memories.py        # CLI: Test memory search
 └── export_review_data_to_csv.py  # CLI: Export to CSV
 ```
 
 ## Architecture
 
-### Run Isolation System (Phase 1)
+### Run Isolation System (Phase 1 & Phase 2)
 
-Phase 1 uses a run isolation system to prevent output mixing between pipeline executions:
+Phase 1 and Phase 2 use a run isolation system to prevent output mixing between pipeline executions:
 
 - **create_run(phase)**: Creates a new run directory with timestamp-based ID
 - **get_latest_run(phase)**: Gets the most recent run (for chained operations)
@@ -161,6 +192,13 @@ Each run contains a `run.json` with metadata:
    - Generates search queries via LLM from PR context and diff
    - Searches using vector similarity, calculates recall/precision/F1
 
+6. **Reranking Experiment** (`scripts/phase2/experiment.py`):
+   - Reuses Phase 1 database and test cases (no separate memory extraction)
+   - Generates queries, runs vector search, pools and deduplicates results
+   - Reranks candidates using cross-encoder (bge-reranker-v2-m3)
+   - Takes top-N after reranking (default: 4)
+   - Computes metrics before and after reranking for comparison
+
 ### Memory Schema (Phase 1)
 
 ```json
@@ -178,4 +216,5 @@ Each run contains a `run.json` with metadata:
 - Python 3.13 (uv package manager)
 - Requires `OPENROUTER_API_KEY` environment variable
 - Phase 1 requires Ollama with `mxbai-embed-large` model for embeddings
+- Phase 2 requires `sentence-transformers` package (for bge-reranker-v2-m3 cross-encoder)
 - Data files in `data/` are gitignored (contains sensitive real-world code reviews)

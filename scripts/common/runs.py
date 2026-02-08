@@ -84,6 +84,7 @@ RUN_METADATA_FILE = "run.json"
 
 # Phase identifiers
 PHASE1 = "phase1"
+PHASE2 = "phase2"
 
 
 def _get_runs_dir(phase: str) -> Path:
@@ -306,6 +307,7 @@ __all__ = [
     "RunMetadata",
     "PipelineStageStatus",
     "PHASE1",
+    "PHASE2",
     "create_run",
     "get_latest_run",
     "get_run",
