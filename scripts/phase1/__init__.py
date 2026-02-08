@@ -9,13 +9,19 @@ Modules:
     db: SQLite + sqlite-vec database operations
 
 Typical Workflow:
-    1. Extract memories: uv run python scripts/phase1/build_memories.py <file>.json
+    1. Extract memories: uv run python scripts/phase1/build_memories.py --all data/review_data
     2. Build database: uv run python scripts/phase1/db.py --rebuild
+    3. Generate test cases: uv run python scripts/phase1/test_cases.py
+    4. Run experiments: uv run python scripts/phase1/experiment.py --all
+
+Note:
+    Path discovery is now handled by the runs module. Use:
+        from common.runs import get_latest_run
+        run_dir = get_latest_run("phase1")
 """
 
 from phase1.load_memories import (
     load_memories,
-    DEFAULT_MEMORIES_DIR,
     FIELD_ID,
     FIELD_SITUATION,
     FIELD_LESSON,
@@ -33,7 +39,6 @@ from phase1.db import (
 __all__ = [
     # memories
     "load_memories",
-    "DEFAULT_MEMORIES_DIR",
     "FIELD_ID",
     "FIELD_SITUATION",
     "FIELD_LESSON",

@@ -5,11 +5,14 @@ This script processes raw code review data using AI to extract reusable
 engineering knowledge as structured memories.
 
 Usage:
-    # Process single file
+    # Process single file (creates new run)
     uv run python scripts/phase1/build_memories.py data/review_data/review_001.json
 
-    # Process all JSON files in directory
+    # Process all JSON files in directory (creates new run)
     uv run python scripts/phase1/build_memories.py --all data/review_data
+
+    # Use specific run (for re-processing)
+    uv run python scripts/phase1/build_memories.py --all data/review_data --run-id run_20260208_143022
 """
 
 import hashlib
@@ -26,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from common import load_json, ensure_dir, call_openrouter
 from common.prompts import load_prompt
+from common.runs import create_run, get_run, update_run_status, PHASE1
 
 # Phase 1 prompts directory
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
@@ -110,7 +114,7 @@ _SITUATION_VALIDATORS = {
 
 def build_memories(
     raw_path: str,
-    out_dir: str = "data/phase1/memories",
+    out_dir: str,
     model: str = "anthropic/claude-haiku-4.5",
     sleep_s: float = 0.25,
     prompt_version: Optional[str] = None,
@@ -299,11 +303,14 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Process single file
+  # Process single file (creates new run)
   uv run python scripts/phase1/build_memories.py data/review_data/review_001.json
 
-  # Process all JSON files in directory
+  # Process all JSON files in directory (creates new run)
   uv run python scripts/phase1/build_memories.py --all data/review_data
+
+  # Use specific run (for re-processing)
+  uv run python scripts/phase1/build_memories.py --all data/review_data --run-id run_20260208_143022
         """,
     )
     parser.add_argument(
@@ -320,8 +327,25 @@ Examples:
         default=None,
         help="Prompt semver to use (e.g. '2.0.0'). Defaults to latest.",
     )
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Use existing run instead of creating new one (e.g. 'run_20260208_143022')",
+    )
 
     args = parser.parse_args()
+
+    # Determine run directory
+    if args.run_id:
+        run_dir = get_run(PHASE1, args.run_id)
+        run_id = args.run_id
+        print(f"Using existing run: {run_id}")
+    else:
+        run_id, run_dir = create_run(PHASE1)
+        print(f"Created new run: {run_id}")
+
+    out_dir = str(run_dir / "memories")
+    print(f"Output directory: {out_dir}\n")
 
     if args.all:
         dir_path = Path(args.path)
@@ -340,7 +364,7 @@ Examples:
         for i, json_file in enumerate(json_files, 1):
             print(f"[{i}/{len(json_files)}] Processing: {json_file.name}")
             try:
-                build_memories(str(json_file), prompt_version=args.prompt_version)
+                build_memories(str(json_file), out_dir=out_dir, prompt_version=args.prompt_version)
                 total_success += 1
             except Exception as e:
                 print(f"Failed to process {json_file.name}: {e}")
@@ -350,5 +374,17 @@ Examples:
         print("=== Summary ===")
         print(f"Successfully processed: {total_success}")
         print(f"Failed: {total_failed}")
+        print(f"Run: {run_id}")
+
+        # Update run status
+        update_run_status(run_dir, "build_memories", {
+            "count": total_success,
+            "failed": total_failed,
+            "prompt_version": args.prompt_version,
+        })
     else:
-        build_memories(args.path, prompt_version=args.prompt_version)
+        build_memories(args.path, out_dir=out_dir, prompt_version=args.prompt_version)
+        update_run_status(run_dir, "build_memories", {
+            "count": 1,
+            "prompt_version": args.prompt_version,
+        })

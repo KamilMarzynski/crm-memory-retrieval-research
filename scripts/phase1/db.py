@@ -15,12 +15,15 @@ Database Structure:
     - vec_memories: vec0 virtual table for vector similarity search
 
 Usage:
-    # Rebuild database from JSONL files
+    # Rebuild database from JSONL files (uses latest run)
     uv run python scripts/phase1/db.py --rebuild
+
+    # Use specific run
+    uv run python scripts/phase1/db.py --rebuild --run-id run_20260208_143022
 
     # Programmatic usage
     from phase1.db import search_memories
-    results = search_memories("data/phase1/memories/memories.db", "async function", limit=5)
+    results = search_memories("path/to/memories.db", "async function", limit=5)
 """
 
 import json
@@ -39,7 +42,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from phase1.load_memories import (
     load_memories,
-    DEFAULT_MEMORIES_DIR,
     FIELD_ID,
     FIELD_SITUATION,
     FIELD_LESSON,
@@ -47,6 +49,7 @@ from phase1.load_memories import (
     FIELD_SOURCE,
     FIELD_DISTANCE,
 )
+from common.runs import get_latest_run, get_run, update_run_status, PHASE1
 
 # Ollama configuration
 OLLAMA_HOST = None  # Set to custom host URL (e.g., "http://localhost:11434") or None for default
@@ -56,8 +59,9 @@ VECTOR_DIMENSIONS = 1024
 # Initialize Ollama client (uses default host if OLLAMA_HOST is None)
 _ollama_client = ollama.Client(host=OLLAMA_HOST) if OLLAMA_HOST else None
 
-# Default database path
+# Default database path (legacy, prefer using run-based paths)
 DEFAULT_DB_PATH = "data/phase1/memories/memories.db"
+DEFAULT_MEMORIES_DIR = "data/phase1/memories"
 
 
 def _serialize_f32(vector: List[float]) -> bytes:
@@ -488,31 +492,31 @@ def _print_usage() -> None:
     print("SQLite-vec Memory Search Database")
     print()
     print("Usage:")
-    print("  uv run python scripts/phase1/db.py --rebuild")
-    print("  uv run python scripts/phase1/db.py --search <query> [--limit N]")
+    print("  uv run python scripts/phase1/db.py --rebuild [--run-id <id>]")
+    print("  uv run python scripts/phase1/db.py --search <query> [--limit N] [--run-id <id>]")
     print()
     print("Commands:")
     print("  --rebuild          Rebuild database from memories/*.jsonl files")
     print("  --search <query>   Search memories using vector similarity")
     print()
     print("Options:")
+    print("  --run-id <id>      Use specific run (default: latest run)")
     print("  --limit N          Maximum results to return (default: 10)")
     print()
     print("Configuration:")
-    print(f"  Database location: {DEFAULT_DB_PATH}")
-    print(f"  Source JSONL files: {DEFAULT_MEMORIES_DIR}/memories_*.jsonl")
     print(f"  Ollama host: {OLLAMA_HOST or '(default)'}")
     print(f"  Embedding model: {OLLAMA_MODEL}")
     print(f"  Vector dimensions: {VECTOR_DIMENSIONS}")
 
 
-def _run_search(query: str, limit: int = 10) -> None:
+def _run_search(query: str, db_path: str, limit: int = 10) -> None:
     """Run a search and print results."""
     print(f"Searching for: {query}")
+    print(f"Database: {db_path}")
     print(f"Limit: {limit}")
     print()
 
-    results = search_memories(DEFAULT_DB_PATH, query, limit=limit)
+    results = search_memories(db_path, query, limit=limit)
 
     if not results:
         print("No results found.")
@@ -527,26 +531,66 @@ def _run_search(query: str, limit: int = 10) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="SQLite-vec Memory Search Database",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Rebuild database (uses latest run)
+  uv run python scripts/phase1/db.py --rebuild
+
+  # Rebuild database for specific run
+  uv run python scripts/phase1/db.py --rebuild --run-id run_20260208_143022
+
+  # Search memories
+  uv run python scripts/phase1/db.py --search "async function" --limit 5
+        """,
+    )
+    parser.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="Rebuild database from memories/*.jsonl files",
+    )
+    parser.add_argument(
+        "--search",
+        type=str,
+        help="Search memories using vector similarity",
+    )
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Use specific run (default: latest run)",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="Maximum results to return (default: 10)",
+    )
+
+    args = parser.parse_args()
+
+    if not args.rebuild and not args.search:
         _print_usage()
         sys.exit(1)
 
-    if sys.argv[1] == "--rebuild":
-        rebuild_database()
-    elif sys.argv[1] == "--search":
-        if len(sys.argv) < 3:
-            print("Error: --search requires a query argument")
-            sys.exit(1)
-        query = sys.argv[2]
-        limit = 10
-        if "--limit" in sys.argv:
-            try:
-                limit_idx = sys.argv.index("--limit")
-                limit = int(sys.argv[limit_idx + 1])
-            except (IndexError, ValueError):
-                print("Error: --limit requires a numeric argument")
-                sys.exit(1)
-        _run_search(query, limit)
+    # Determine run directory
+    if args.run_id:
+        run_dir = get_run(PHASE1, args.run_id)
+        print(f"Using run: {args.run_id}")
     else:
-        _print_usage()
-        sys.exit(1)
+        run_dir = get_latest_run(PHASE1)
+        print(f"Using latest run: {run_dir.name}")
+
+    memories_dir = str(run_dir / "memories")
+    db_path = str(run_dir / "memories" / "memories.db")
+
+    if args.rebuild:
+        rebuild_database(db_path=db_path, memories_dir=memories_dir)
+        memory_count = get_memory_count(db_path)
+        update_run_status(run_dir, "db", {"memory_count": memory_count})
+        print(f"\nRun status updated: {run_dir.name}")
+    elif args.search:
+        _run_search(args.search, db_path, limit=args.limit)
