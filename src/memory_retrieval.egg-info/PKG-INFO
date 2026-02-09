@@ -1,0 +1,20 @@
+Metadata-Version: 2.4
+Name: memory-retrieval
+Version: 0.1.0
+Summary: Memory retrieval research for code review knowledge
+Requires-Python: >=3.13
+Description-Content-Type: text/markdown
+Requires-Dist: jupyter>=1.0.0
+Requires-Dist: matplotlib>=3.9.0
+Requires-Dist: numpy>=2.0.0
+Requires-Dist: ollama>=0.4.0
+Requires-Dist: requests>=2.32.5
+Requires-Dist: sentence-transformers>=3.0.0
+Requires-Dist: sqlite-vec>=0.1.6
+
+# crm-memory-retrieval-research
+
+Sole purpose of this repository is to allow me to research and experiment with memory retrieval techniques for my [code review mentat](https://github.com/KamilMarzynski/code-review-mentat) project
+
+I am using real world data for this, which means that I cannot share the data itself. However, I will share code snippets and instructions on how to replicate the experiments with your own data.
+I will also document my findings here or in separate repository, which I will link to from here.

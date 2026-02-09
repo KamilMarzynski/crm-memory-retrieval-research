@@ -13,133 +13,90 @@ Research repository for experimenting with memory retrieval techniques for the [
 uv sync
 
 # Export code review data to CSV (for external tools)
-uv run python scripts/export_review_data_to_csv.py
-
-# === Phase 0: Keyword Search ===
-# Extract memories from raw code review data (requires OPENROUTER_API_KEY)
-uv run python scripts/phase0/build_memories.py data/review_data/<file>.json
-
-# Build/rebuild SQLite FTS5 search database
-uv run python scripts/phase0/db.py --rebuild
-
-# Build test cases from raw data and extracted memories
-uv run python scripts/phase0/test_cases.py
-
-# Run retrieval experiment on all test cases
-uv run python scripts/phase0/experiment.py --all
-
-# === Phase 1: Vector Search (with Run Isolation) ===
-# Each pipeline run creates an isolated directory with all outputs
-
-# Extract memories (creates new run)
-uv run python scripts/phase1/build_memories.py --all data/review_data
-
-# Build vector database (uses latest run)
-uv run python scripts/phase1/db.py --rebuild
-
-# Generate test cases (uses latest run)
-uv run python scripts/phase1/test_cases.py
-
-# Run experiments (uses latest run)
-uv run python scripts/phase1/experiment.py --all
-
-# Use specific run (for re-running experiments)
-uv run python scripts/phase1/experiment.py --all --run-id run_20260208_143022
-
-# Test memory search
-uv run python scripts/fetch_memories.py "your search query"
-
-# === Phase 2: Vector Search + Reranking ===
-# Reuses Phase 1's memories, database, and test cases
-# Adds cross-encoder reranking (bge-reranker-v2-m3) after vector search
-
-# Run all experiments (creates new Phase 2 run, uses latest Phase 1 run)
-uv run python scripts/phase2/experiment.py --all
-
-# Use specific Phase 1 run
-uv run python scripts/phase2/experiment.py --all --phase1-run-id run_20260208_143022
-
-# Custom reranking parameters
-uv run python scripts/phase2/experiment.py --all --rerank-top-n 5 --search-limit 20
-
-# Test reranker standalone
-uv run python scripts/phase2/reranker.py --test "async error handling" --top-n 4
-
-# List available test cases (from Phase 1)
-uv run python scripts/phase2/test_cases.py
+uv run python export_review_data_to_csv.py
 ```
 
-## Data Structure
+All experiment workflows are run from Jupyter notebooks in `notebooks/`. See `notebooks/phase1/phase1.ipynb`, `notebooks/phase1/phase1_threshold_analysis.ipynb`, and `notebooks/phase2/phase2.ipynb`.
+
+## Package Structure
 
 ```
+src/
+  memory_retrieval/
+    memories/                    # Domain: Memory extraction & schema
+      schema.py                  # All FIELD_* constants
+      loader.py                  # load_memories from JSONL
+      helpers.py                 # stable_id, lang_from_file, file_pattern, etc.
+      validators.py              # situation/lesson validators with version registry
+      extractor.py               # Unified extraction (SituationFormat.SINGLE or VARIANTS)
+
+    search/                      # Domain: Retrieval backends
+      base.py                    # SearchResult dataclass + SearchBackend Protocol
+      db_utils.py                # Shared: get_db_connection, serialize/deserialize JSON
+      fts5.py                    # FTS5Backend class (keyword search)
+      vector.py                  # VectorBackend class (embedding search via sqlite-vec)
+      reranker.py                # Reranker class (cross-encoder reranking)
+
+    experiments/                 # Domain: Running & evaluating experiments
+      runner.py                  # Unified run_experiment/run_all via ExperimentConfig
+      metrics.py                 # compute_metrics, analyze_query_performance
+      query_generation.py        # parse_queries_robust + constants
+      test_cases.py              # build_test_cases, filter_diff
+
+    infra/                       # Infrastructure utilities
+      io.py                      # load_json, save_json, ensure_dir
+      llm.py                     # call_openrouter (OpenRouter API client)
+      prompts.py                 # load_prompt, Prompt dataclass (versioned prompts)
+      runs.py                    # Run isolation system
+
 data/
-├── review_data/          # Input: Raw code review JSON files
-├── phase0/               # Phase 0: Keyword search experiments
-│   ├── memories/         # Extracted memories (JSONL) + SQLite DB
-│   │   ├── memories_*.jsonl  # Accepted memories
-│   │   ├── rejected_*.jsonl  # Rejected memories
-│   │   └── memories.db       # FTS5 search database
-│   ├── test_cases/       # Self-contained test cases for experiments
-│   │   └── *.json        # One test case per PR (filtered diff + ground truth IDs)
-│   └── results/          # Experiment results (JSON)
-├── phase1/               # Phase 1: Vector search experiments
-│   └── runs/             # Run isolation: each pipeline execution is isolated
-│       ├── run_20260208_143022/  # Timestamp-based run ID
-│       │   ├── run.json          # Run metadata and pipeline status
-│       │   ├── memories/         # Extracted memories for this run
-│       │   │   ├── memories_*.jsonl
-│       │   │   ├── rejected_*.jsonl
-│       │   │   └── memories.db   # Vector search database (sqlite-vec)
-│       │   ├── test_cases/       # Test cases for this run
-│       │   │   └── *.json
-│       │   └── results/          # Experiment results for this run
-│       │       └── results_*.json
-│       └── run_20260209_101530/  # Another run (outputs isolated)
-│           └── ...
-└── phase2/               # Phase 2: Vector search + reranking experiments
-    └── runs/             # Run isolation (results only; reuses Phase 1 DB/test cases)
-        └── run_20260210_091500/
-            ├── run.json          # Includes phase1_run_id reference
-            └── results/
-                └── results_*.json
-```
+  prompts/                       # Versioned prompt templates per phase
+    phase0/                      # FTS-specific prompts
+    phase1/                      # Vector search prompts
+    phase2/                      # Reranking prompts
+  review_data/                   # Input: Raw code review JSON files
+  phase0/                        # Phase 0: Keyword search data
+  phase1/runs/                   # Phase 1: Vector search runs (isolated)
+  phase2/runs/                   # Phase 2: Reranking runs (isolated)
 
-## Scripts
-
-```
-scripts/
-├── common/                  # Shared utilities across all phases
-│   ├── io.py               # load_json, save_json, ensure_dir
-│   ├── load_memories.py    # Memory loading from JSONL, shared field constants
-│   ├── openrouter.py       # OpenRouter LLM API client
-│   ├── runs.py             # Run isolation system for experiment tracking
-│   └── test_cases.py       # Test case generation utilities
-│
-├── phase0/                  # Phase 0: Keyword search experiments
-│   ├── build_memories.py   # Extract memories via LLM (CLI: <file> | --all)
-│   ├── db.py               # SQLite FTS5 database (CLI: --rebuild)
-│   ├── load_memories.py    # Phase 0 field constants, re-exports common
-│   ├── test_cases.py       # Test case generation (CLI)
-│   └── experiment.py       # Experiment runner (CLI: <file> | --all)
-│
-├── phase1/                  # Phase 1: Vector search experiments
-│   ├── build_memories.py   # Extract memories (CLI: --all, --run-id)
-│   ├── db.py               # SQLite + sqlite-vec database (CLI: --rebuild, --run-id)
-│   ├── load_memories.py    # Phase 1 field constants
-│   ├── test_cases.py       # Test case generation (CLI: --run-id)
-│   └── experiment.py       # Experiment runner (CLI: --all, --run-id)
-│
-├── phase2/                  # Phase 2: Vector search + reranking
-│   ├── reranker.py         # Cross-encoder reranker (bge-reranker-v2-m3)
-│   ├── load_memories.py    # Phase 2 field constants (re-exports Phase 1 + rerank_score)
-│   ├── test_cases.py       # Test case path resolution (from Phase 1 runs)
-│   └── experiment.py       # Experiment runner (CLI: --all, --phase1-run-id, --rerank-top-n)
-│
-├── fetch_memories.py        # CLI: Test memory search
-└── export_review_data_to_csv.py  # CLI: Export to CSV
+notebooks/
+  phase1/phase1.ipynb                    # Full pipeline: extract → DB → test cases → experiments
+  phase1/phase1_threshold_analysis.ipynb # Distance threshold analysis
+  phase2/phase2.ipynb                    # Reranking experiments
 ```
 
 ## Architecture
+
+### Key Design Patterns
+
+**SearchBackend Protocol** (`search/base.py`): All search backends implement a common protocol with `create_database`, `insert_memories`, `search`, and `rebuild_database` methods. Results are returned as `SearchResult` dataclasses with normalized fields.
+
+**ExperimentConfig** (`experiments/runner.py`): Unified experiment runner controlled by a single config dataclass. When `config.reranker is not None`, the runner adds pool+dedup+rerank steps and computes pre/post metrics. Otherwise it computes standard metrics.
+
+**ExtractionConfig** (`memories/extractor.py`): Controls memory extraction format. `SituationFormat.SINGLE` produces single situation descriptions (for vector search), `SituationFormat.VARIANTS` produces 3 semicolon-separated variants (for FTS5).
+
+### Notebook Usage
+
+```python
+from memory_retrieval.search.vector import VectorBackend
+from memory_retrieval.search.reranker import Reranker
+from memory_retrieval.experiments.runner import run_all_experiments, ExperimentConfig
+from memory_retrieval.infra.runs import get_latest_run
+
+config = ExperimentConfig(
+    search_backend=VectorBackend(),
+    reranker=Reranker(),          # None for standard (no reranking) path
+    rerank_top_n=4,
+    prompts_dir="data/prompts/phase2",
+)
+run_dir = get_latest_run("phase1")
+results = run_all_experiments(
+    str(run_dir / "test_cases"),
+    str(run_dir / "memories" / "memories.db"),
+    str(run_dir / "results"),
+    config,
+)
+```
 
 ### Run Isolation System (Phase 1 & Phase 2)
 
@@ -170,36 +127,36 @@ Each run contains a `run.json` with metadata:
 
 1. **Input**: Raw code review JSON files in `data/review_data/` containing PR context, metadata, and code review comments with fields like severity, confidence, code snippets, and user notes
 
-2. **Memory Extraction** (`scripts/phase1/build_memories.py`):
+2. **Memory Extraction** (`memories/extractor.py`):
    - Two-stage AI processing via OpenRouter API
    - Stage 1: Extract concrete situation description (25-60 words)
    - Stage 2: Extract actionable lesson (imperative, max 160 chars)
    - Quality validation rejects generic or malformed outputs
 
-3. **Search Database** (`scripts/phase1/db.py`):
+3. **Search Database** (`search/vector.py`):
    - Loads JSONL memories into SQLite with sqlite-vec extension
    - Generates embeddings via Ollama (mxbai-embed-large)
    - Supports cosine distance ranking
 
-4. **Test Case Generation** (`scripts/phase1/test_cases.py`):
+4. **Test Case Generation** (`experiments/test_cases.py`):
    - Processes raw PR data and extracted memories
    - Filters diffs (removes lock files, generated code, etc.)
    - Computes ground truth memory IDs by matching comment IDs
    - Creates self-contained test case files (skips PRs with no memories)
 
-5. **Retrieval Experiment** (`scripts/phase1/experiment.py`):
+5. **Retrieval Experiment** (`experiments/runner.py`):
    - Loads test case with pre-computed ground truth
    - Generates search queries via LLM from PR context and diff
    - Searches using vector similarity, calculates recall/precision/F1
 
-6. **Reranking Experiment** (`scripts/phase2/experiment.py`):
+6. **Reranking Experiment** (`experiments/runner.py` with `reranker` config):
    - Reuses Phase 1 database and test cases (no separate memory extraction)
    - Generates queries, runs vector search, pools and deduplicates results
    - Reranks candidates using cross-encoder (bge-reranker-v2-m3)
    - Takes top-N after reranking (default: 4)
    - Computes metrics before and after reranking for comparison
 
-### Memory Schema (Phase 1)
+### Memory Schema
 
 ```json
 {
