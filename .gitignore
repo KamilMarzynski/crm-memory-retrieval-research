@@ -12,5 +12,6 @@ __pycache__/
 # Keep these files
 !/data/**/.gitkeep
 !/data/**/README.md
+!/data/prompts/**
 
 .venv
