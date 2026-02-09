@@ -60,9 +60,10 @@ data/
   phase2/runs/                   # Phase 2: Reranking runs (isolated)
 
 notebooks/
-  phase1/phase1.ipynb                    # Full pipeline: extract → DB → test cases → experiments
-  phase1/phase1_threshold_analysis.ipynb # Distance threshold analysis
-  phase2/phase2.ipynb                    # Reranking experiments
+  phase1/phase1.ipynb                              # Full pipeline: extract → DB → test cases → experiments
+  phase1/phase1_threshold_analysis.ipynb           # Distance threshold analysis
+  phase2/phase2.ipynb                              # Full pipeline with reranking (independent from phase1)
+  phase2/phase1_reranking_comparison.ipynb         # Reranking on phase1 data (comparison tool)
 ```
 
 ## Architecture
@@ -150,7 +151,7 @@ Each run contains a `run.json` with metadata:
    - Searches using vector similarity, calculates recall/precision/F1
 
 6. **Reranking Experiment** (`experiments/runner.py` with `reranker` config):
-   - Reuses Phase 1 database and test cases (no separate memory extraction)
+   - Can run independently (phase2.ipynb) or on Phase 1 data (phase1_reranking_comparison.ipynb)
    - Generates queries, runs vector search, pools and deduplicates results
    - Reranks candidates using cross-encoder (bge-reranker-v2-m3)
    - Takes top-N after reranking (default: 4)
@@ -172,6 +173,6 @@ Each run contains a `run.json` with metadata:
 
 - Python 3.13 (uv package manager)
 - Requires `OPENROUTER_API_KEY` environment variable
-- Phase 1 requires Ollama with `mxbai-embed-large` model for embeddings
-- Phase 2 requires `sentence-transformers` package (for bge-reranker-v2-m3 cross-encoder)
+- Phase 1 and Phase 2 require Ollama with `mxbai-embed-large` model for embeddings
+- Phase 2 additionally requires `sentence-transformers` package (for bge-reranker-v2-m3 cross-encoder)
 - Data files in `data/` are gitignored (contains sensitive real-world code reviews)

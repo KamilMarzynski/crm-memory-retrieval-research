@@ -1,3 +1,6 @@
+# OUTDATED
+
+
 # Data Directory
 
 This directory contains both input data and output results for the memory retrieval research project.
