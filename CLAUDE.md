@@ -152,10 +152,11 @@ Each run contains a `run.json` with metadata:
 
 6. **Reranking Experiment** (`experiments/runner.py` with `reranker` config):
    - Can run independently (phase2.ipynb) or on Phase 1 data (phase1_reranking_comparison.ipynb)
-   - Generates queries, runs vector search, pools and deduplicates results
-   - Reranks candidates using cross-encoder (bge-reranker-v2-m3)
-   - Takes top-N after reranking (default: 4)
+   - Generates queries, runs vector search
+   - **Per-query reranking**: each query's results are reranked independently against that query using the cross-encoder (bge-reranker-v2-m3), then pooled and deduplicated by best rerank score
+   - Takes top-N after pooling (default: 4)
    - Computes metrics before and after reranking for comparison
+   - Stores all pooled reranked candidates in `reranked_results` (sorted by rerank score descending) for downstream sweep analysis
 
 ### Memory Schema
 
@@ -168,6 +169,55 @@ Each run contains a `run.json` with metadata:
   "source": { "file", "line", "code_snippet", "comment", "pr_context" }
 }
 ```
+
+## Research Context & Experimentation Guide
+
+### What This Research Is About
+
+The goal is to build a **memory retrieval system** for the code-review-mentat tool. When a developer opens a PR, the system should automatically retrieve relevant past lessons (memories) from a knowledge base to enrich the AI code review. The core research question is: **how do we retrieve the right memories given a PR's diff and context?**
+
+### Production Flow (What We're Optimizing For)
+
+In production, the app will:
+1. Receive a PR with diff + Jira/Confluence context
+2. Generate multiple search queries from that context via LLM
+3. Run vector search for each query against the memories database
+4. Rerank each query's results independently using a cross-encoder
+5. Pool results across all queries, deduplicate by best rerank score
+6. Return top-N memories to include in the code review prompt
+
+Each experiment evaluates this flow against ground truth (known memory-to-PR mappings from real code reviews).
+
+### Experiment Phases
+
+- **Phase 0** (FTS5): Keyword-based search baseline. Historical, not actively iterated.
+- **Phase 1** (Vector search): Embedding-based retrieval. The main baseline. Iterates on prompts, models, and distance thresholds.
+- **Phase 2** (Reranking): Adds cross-encoder reranking on top of vector search. Two modes:
+  - `phase2.ipynb`: Full independent pipeline (own memories, DB, test cases) — for iterating on extraction prompts + reranking together
+  - `phase1_reranking_comparison.ipynb`: Reuses Phase 1 data — isolates the reranking impact without changing anything else
+
+### Key Metrics
+
+- **Recall**: fraction of ground truth memories that appear in the retrieved set
+- **Precision**: fraction of retrieved memories that are ground truth
+- **F1**: harmonic mean of precision and recall (primary optimization target)
+- **MRR**: mean reciprocal rank of the first ground truth hit
+
+All metrics are **macro-averaged** (computed per test case, then averaged across test cases).
+
+### What to Vary in Experiments
+
+| Lever | Where | Notes |
+|---|---|---|
+| Query generation prompt | `data/prompts/<phase>/memory-query/` | Controls what queries the LLM generates from the PR |
+| Query generation model | `ExperimentConfig.model` | Smarter models generate better queries |
+| Memory extraction prompt | `data/prompts/<phase>/situation/`, `lesson/` | Controls memory quality (situation + lesson text) |
+| Number of queries | Prompt-driven | More queries = broader recall, more noise |
+| Search limit per query | `ExperimentConfig.search_limit` | How many candidates per query (default: 20) |
+| Distance threshold | `ExperimentConfig.distance_threshold` | Pre-rerank filter for vector distance |
+| Rerank top-N | `ExperimentConfig.rerank_top_n` | How many results to keep after reranking |
+| Reranker model | `Reranker(model_name=...)` | Cross-encoder model for reranking |
+| Embedding model | Ollama model in `VectorBackend` | Currently `mxbai-embed-large` |
 
 ## Environment
 

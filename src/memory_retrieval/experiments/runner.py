@@ -66,6 +66,22 @@ def _pool_and_deduplicate(
     return sorted(best.values(), key=lambda x: x.get("distance", 0))
 
 
+def _pool_and_deduplicate_by_rerank_score(
+    per_query_reranked: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Pool reranked results from all queries, keeping the highest rerank score per memory."""
+    best: dict[str, dict[str, Any]] = {}
+
+    for qr in per_query_reranked:
+        for r in qr["reranked"]:
+            mid = r["id"]
+            score = r.get(FIELD_RERANK_SCORE, float("-inf"))
+            if mid not in best or score > best[mid].get(FIELD_RERANK_SCORE, float("-inf")):
+                best[mid] = r
+
+    return sorted(best.values(), key=lambda x: x.get(FIELD_RERANK_SCORE, 0), reverse=True)
+
+
 def run_experiment(
     test_case_path: str,
     db_path: str,
@@ -204,32 +220,32 @@ def run_experiment(
             "ground_truth_retrieved": len(pre_rerank_threshold_ids & ground_truth_ids),
         }
 
-        # Pool, deduplicate, and rerank
-        pooled_candidates = _pool_and_deduplicate(query_results)
-        print(f"Pooled candidates (deduplicated): {len(pooled_candidates)}")
-
-        # Find best query for reranking
-        best_query = queries[0] if queries else ""
-        best_query_hits = 0
+        # Per-query reranking: rerank each query's results independently
+        all_reranked_per_query = []
         for qr in query_results:
-            hits = sum(1 for r in qr["results"] if r["is_ground_truth"])
-            if hits > best_query_hits:
-                best_query_hits = hits
-                best_query = qr["query"]
+            query_text = qr["query"]
+            query_candidates = qr["results"]
+            reranked_for_query = config.reranker.rerank(
+                query_text, query_candidates, top_n=None, text_field="situation"
+            )
+            all_reranked_per_query.append({
+                "query": query_text,
+                "reranked": reranked_for_query,
+            })
 
-        print(f"Reranking with best query ({best_query_hits} GT hits): {best_query[:80]}...")
-        reranked = config.reranker.rerank(
-            best_query, pooled_candidates, top_n=config.rerank_top_n
-        )
+        # Pool and deduplicate by best rerank score, then take top-N
+        pooled_reranked = _pool_and_deduplicate_by_rerank_score(all_reranked_per_query)
+        print(f"Pooled reranked candidates (deduplicated): {len(pooled_reranked)}")
+        top_reranked = pooled_reranked[:config.rerank_top_n]
 
         # Post-rerank metrics
-        reranked_ids = {r["id"] for r in reranked}
+        reranked_ids = {r["id"] for r in top_reranked}
         post_rerank_metrics = compute_metrics(reranked_ids, ground_truth_ids)
 
-        result["rerank_query"] = best_query
+        result["rerank_queries"] = queries
         result["post_rerank_metrics"] = {
             **post_rerank_metrics,
-            "reranked_count": len(reranked),
+            "reranked_count": len(top_reranked),
             "ground_truth_retrieved": len(reranked_ids & ground_truth_ids),
         }
         result["reranked_results"] = [
@@ -241,7 +257,7 @@ def run_experiment(
                 "lesson": r.get("lesson", ""),
                 "is_ground_truth": r["id"] in ground_truth_ids,
             }
-            for r in reranked
+            for r in pooled_reranked  # Store ALL for sweep analysis
         ]
         result["retrieved_ground_truth_ids"] = sorted(list(reranked_ids & ground_truth_ids))
         result["missed_ground_truth_ids"] = sorted(list(ground_truth_ids - reranked_ids))
