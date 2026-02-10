@@ -1,4 +1,5 @@
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from memory_retrieval.memories.schema import FIELD_SITUATION, FIELD_RERANK_SCORE
@@ -41,11 +42,12 @@ class Reranker:
         candidates: list[dict[str, Any]],
         top_n: int | None = None,
         text_field: str = FIELD_SITUATION,
+        text_fn: Callable[[dict[str, Any]], str] | None = None,
     ) -> list[dict[str, Any]]:
         if not candidates:
             return []
 
-        documents = [c[text_field] for c in candidates]
+        documents = [text_fn(c) for c in candidates] if text_fn else [c[text_field] for c in candidates]
         scores = self.score_pairs(query, documents)
 
         scored = []

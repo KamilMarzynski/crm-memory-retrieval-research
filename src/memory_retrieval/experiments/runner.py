@@ -1,6 +1,7 @@
 import os
 import time
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,7 @@ class ExperimentConfig:
     distance_threshold: float = DEFAULT_DISTANCE_THRESHOLD
     reranker: Reranker | None = None
     rerank_top_n: int = 4
+    rerank_text_strategies: dict[str, Callable[[dict[str, Any]], str]] | None = None
     use_sample_memories: bool = True
     sleep_between: float = DEFAULT_SLEEP_BETWEEN_EXPERIMENTS
 
@@ -80,6 +82,54 @@ def _pool_and_deduplicate_by_rerank_score(
                 best[mid] = r
 
     return sorted(best.values(), key=lambda x: x.get(FIELD_RERANK_SCORE, 0), reverse=True)
+
+
+def _run_rerank_strategy(
+    reranker: Reranker,
+    query_results: list[dict[str, Any]],
+    ground_truth_ids: set[str],
+    rerank_top_n: int,
+    text_fn: Callable[[dict[str, Any]], str] | None = None,
+    text_field: str = "situation",
+) -> dict[str, Any]:
+    """Run reranking for a single text strategy and return metrics + results."""
+    all_reranked_per_query = []
+    for qr in query_results:
+        reranked_for_query = reranker.rerank(
+            qr["query"], qr["results"], top_n=None,
+            text_field=text_field, text_fn=text_fn,
+        )
+        all_reranked_per_query.append({
+            "query": qr["query"],
+            "reranked": reranked_for_query,
+        })
+
+    pooled_reranked = _pool_and_deduplicate_by_rerank_score(all_reranked_per_query)
+    top_reranked = pooled_reranked[:rerank_top_n]
+    reranked_ids = {r["id"] for r in top_reranked}
+    post_metrics = compute_metrics(reranked_ids, ground_truth_ids)
+
+    return {
+        "pooled_count": len(pooled_reranked),
+        "post_rerank_metrics": {
+            **post_metrics,
+            "reranked_count": len(top_reranked),
+            "ground_truth_retrieved": len(reranked_ids & ground_truth_ids),
+        },
+        "reranked_results": [
+            {
+                "id": r["id"],
+                "rerank_score": r[FIELD_RERANK_SCORE],
+                "distance": r.get(FIELD_DISTANCE, r.get("distance", 0)),
+                "situation": r.get(FIELD_SITUATION, r.get("situation", "")),
+                "lesson": r.get("lesson", ""),
+                "is_ground_truth": r["id"] in ground_truth_ids,
+            }
+            for r in pooled_reranked
+        ],
+        "retrieved_ground_truth_ids": sorted(list(reranked_ids & ground_truth_ids)),
+        "missed_ground_truth_ids": sorted(list(ground_truth_ids - reranked_ids)),
+    }
 
 
 def run_experiment(
@@ -221,60 +271,49 @@ def run_experiment(
             "ground_truth_retrieved": len(pre_rerank_threshold_ids & ground_truth_ids),
         }
 
-        # Per-query reranking: rerank each query's results independently
-        all_reranked_per_query = []
-        for qr in query_results:
-            query_text = qr["query"]
-            query_candidates = qr["results"]
-            reranked_for_query = config.reranker.rerank(
-                query_text, query_candidates, top_n=None, text_field="situation"
-            )
-            all_reranked_per_query.append({
-                "query": query_text,
-                "reranked": reranked_for_query,
-            })
-
-        # Pool and deduplicate by best rerank score, then take top-N
-        pooled_reranked = _pool_and_deduplicate_by_rerank_score(all_reranked_per_query)
-        print(f"Pooled reranked candidates (deduplicated): {len(pooled_reranked)}")
-        top_reranked = pooled_reranked[:config.rerank_top_n]
-
-        # Post-rerank metrics
-        reranked_ids = {r["id"] for r in top_reranked}
-        post_rerank_metrics = compute_metrics(reranked_ids, ground_truth_ids)
+        # Per-query reranking with strategy support
+        strategies = config.rerank_text_strategies or {"default": None}
 
         result["rerank_queries"] = queries
-        result["post_rerank_metrics"] = {
-            **post_rerank_metrics,
-            "reranked_count": len(top_reranked),
-            "ground_truth_retrieved": len(reranked_ids & ground_truth_ids),
-        }
-        result["reranked_results"] = [
-            {
-                "id": r["id"],
-                "rerank_score": r[FIELD_RERANK_SCORE],
-                "distance": r.get(FIELD_DISTANCE, r.get("distance", 0)),
-                "situation": r.get(FIELD_SITUATION, r.get("situation", "")),
-                "lesson": r.get("lesson", ""),
-                "is_ground_truth": r["id"] in ground_truth_ids,
+        strategies_results: dict[str, dict[str, Any]] = {}
+
+        for strategy_name, text_fn in strategies.items():
+            strategy = _run_rerank_strategy(
+                config.reranker, query_results, ground_truth_ids,
+                config.rerank_top_n, text_fn=text_fn, text_field="situation",
+            )
+            strategies_results[strategy_name] = strategy
+            print(f"Strategy '{strategy_name}': pooled {strategy['pooled_count']} candidates")
+
+        # Primary strategy (first one) populates top-level keys for backward compat
+        primary_name = next(iter(strategies))
+        primary = strategies_results[primary_name]
+        result["post_rerank_metrics"] = primary["post_rerank_metrics"]
+        result["reranked_results"] = primary["reranked_results"]
+        result["retrieved_ground_truth_ids"] = primary["retrieved_ground_truth_ids"]
+        result["missed_ground_truth_ids"] = primary["missed_ground_truth_ids"]
+
+        if len(strategies) > 1:
+            result["rerank_strategies"] = {
+                name: {k: v for k, v in s.items() if k != "pooled_count"}
+                for name, s in strategies_results.items()
             }
-            for r in pooled_reranked  # Store ALL for sweep analysis
-        ]
-        result["retrieved_ground_truth_ids"] = sorted(list(reranked_ids & ground_truth_ids))
-        result["missed_ground_truth_ids"] = sorted(list(ground_truth_ids - reranked_ids))
 
         # Print summary
         print(f"\nPRE-RERANK METRICS (threshold={config.distance_threshold}):")
         print(f"  Recall:    {pre_rerank_metrics['recall']:.1%}")
         print(f"  Precision: {pre_rerank_metrics['precision']:.1%}")
         print(f"  F1 Score:  {pre_rerank_metrics['f1']:.3f}")
-        print(f"\nPOST-RERANK METRICS (top-{config.rerank_top_n}):")
-        print(f"  Recall:    {post_rerank_metrics['recall']:.1%}")
-        print(f"  Precision: {post_rerank_metrics['precision']:.1%}")
-        print(f"  F1 Score:  {post_rerank_metrics['f1']:.3f}")
 
-        f1_delta = post_rerank_metrics["f1"] - pre_rerank_metrics["f1"]
-        print(f"\nF1 DELTA: {f1_delta:+.3f} ({'improvement' if f1_delta > 0 else 'regression'})")
+        for strategy_name, strategy in strategies_results.items():
+            post_metrics = strategy["post_rerank_metrics"]
+            label = f"POST-RERANK [{strategy_name}]" if len(strategies) > 1 else f"POST-RERANK"
+            print(f"\n{label} (top-{config.rerank_top_n}):")
+            print(f"  Recall:    {post_metrics['recall']:.1%}")
+            print(f"  Precision: {post_metrics['precision']:.1%}")
+            print(f"  F1 Score:  {post_metrics['f1']:.3f}")
+            f1_delta = post_metrics["f1"] - pre_rerank_metrics["f1"]
+            print(f"  F1 DELTA:  {f1_delta:+.3f} ({'improvement' if f1_delta > 0 else 'regression'})")
 
     else:
         # --- Standard (no reranking) path ---
@@ -366,21 +405,47 @@ def run_all_experiments(
                 m: sum(r["pre_rerank_metrics"][m] for r in successful) / len(successful)
                 for m in ["recall", "precision", "f1"]
             }
-            avg_post = {
-                m: sum(r["post_rerank_metrics"][m] for r in successful) / len(successful)
-                for m in ["recall", "precision", "f1"]
-            }
 
             print(f"Experiments run: {len(successful)}")
             print(f"Rerank top-n: {config.rerank_top_n}")
-            print()
-            print(f"{'Metric':<12} {'Pre-rerank':>12} {'Post-rerank':>12} {'Delta':>10}")
-            print("-" * 48)
-            for metric in ["recall", "precision", "f1"]:
-                pre = avg_pre[metric]
-                post = avg_post[metric]
-                delta = post - pre
-                print(f"{metric:<12} {pre:>12.3f} {post:>12.3f} {delta:>+10.3f}")
+
+            strategy_names = list((config.rerank_text_strategies or {"default": None}).keys())
+            has_strategies = "rerank_strategies" in successful[0]
+
+            if has_strategies:
+                # Multi-strategy summary
+                header = f"{'Metric':<12} {'Pre-rerank':>12}"
+                divider_len = 26
+                for name in strategy_names:
+                    header += f" {name:>16} {'Delta':>8}"
+                    divider_len += 26
+                print()
+                print(header)
+                print("-" * divider_len)
+                for metric in ["recall", "precision", "f1"]:
+                    row = f"{metric:<12} {avg_pre[metric]:>12.3f}"
+                    for name in strategy_names:
+                        avg_val = sum(
+                            r["rerank_strategies"][name]["post_rerank_metrics"][metric]
+                            for r in successful
+                        ) / len(successful)
+                        delta = avg_val - avg_pre[metric]
+                        row += f" {avg_val:>16.3f} {delta:>+8.3f}"
+                    print(row)
+            else:
+                # Single strategy summary (backward compat)
+                avg_post = {
+                    m: sum(r["post_rerank_metrics"][m] for r in successful) / len(successful)
+                    for m in ["recall", "precision", "f1"]
+                }
+                print()
+                print(f"{'Metric':<12} {'Pre-rerank':>12} {'Post-rerank':>12} {'Delta':>10}")
+                print("-" * 48)
+                for metric in ["recall", "precision", "f1"]:
+                    pre = avg_pre[metric]
+                    post = avg_post[metric]
+                    delta = post - pre
+                    print(f"{metric:<12} {pre:>12.3f} {post:>12.3f} {delta:>+10.3f}")
         else:
             print("No successful experiments")
     else:
