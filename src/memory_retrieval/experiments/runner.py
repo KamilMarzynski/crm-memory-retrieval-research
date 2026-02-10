@@ -161,6 +161,7 @@ def run_experiment(
             result_entry: dict[str, Any] = {
                 "id": r.id,
                 "situation": r.situation,
+                "lesson": r.lesson,
                 "is_ground_truth": r.id in ground_truth_ids,
             }
             if is_vector:
