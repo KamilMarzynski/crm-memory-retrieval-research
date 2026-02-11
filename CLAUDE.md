@@ -38,9 +38,9 @@ src/
       reranker.py                # Reranker class (cross-encoder reranking)
 
     experiments/                 # Domain: Running & evaluating experiments
-      runner.py                  # Unified run_experiment/run_all via ExperimentConfig
+      runner.py                  # run_experiment/run_all via ExperimentConfig (search + metrics only)
       metrics.py                 # compute_metrics, analyze_query_performance
-      query_generation.py        # parse_queries_robust + constants
+      query_generation.py        # QueryGenerationConfig, generate_all_queries (LLM query generation)
       test_cases.py              # build_test_cases, filter_diff
 
     infra/                       # Infrastructure utilities
@@ -57,12 +57,18 @@ data/
   review_data/                   # Input: Raw code review JSON files
   phase0/                        # Phase 0: Keyword search data
   phase1/runs/                   # Phase 1: Vector search runs (isolated)
-  phase2/runs/                   # Phase 2: Reranking runs (isolated)
+    <run_id>/
+      memories/                  # Extracted memory JSONL files + memories.db
+      test_cases/                # Ground truth test case JSON files
+      queries/                   # Pre-generated LLM query JSON files
+      results/                   # Experiment result JSON files
+      run.json                   # Run metadata and pipeline status
+  phase2/runs/                   # Phase 2: Reranking runs (same structure)
 
 notebooks/
-  phase1/phase1.ipynb                              # Full pipeline: extract → DB → test cases → experiments
+  phase1/phase1.ipynb                              # Full pipeline: extract → DB → test cases → queries → experiments
   phase1/phase1_threshold_analysis.ipynb           # Distance threshold analysis
-  phase2/phase2.ipynb                              # Full pipeline with reranking (independent from phase1)
+  phase2/phase2.ipynb                              # Full pipeline with reranking: extract → DB → test cases → queries → experiments
   phase2/phase1_reranking_comparison.ipynb         # Reranking on phase1 data (comparison tool)
 ```
 
@@ -72,7 +78,9 @@ notebooks/
 
 **SearchBackend Protocol** (`search/base.py`): All search backends implement a common protocol with `create_database`, `insert_memories`, `search`, and `rebuild_database` methods. Results are returned as `SearchResult` dataclasses with normalized fields.
 
-**ExperimentConfig** (`experiments/runner.py`): Unified experiment runner controlled by a single config dataclass. When `config.reranker is not None`, the runner adds pool+dedup+rerank steps and computes pre/post metrics. Otherwise it computes standard metrics.
+**ExperimentConfig** (`experiments/runner.py`): Experiment runner controlled by a config dataclass with search/reranking parameters only (no LLM config). When `config.reranker is not None`, the runner adds pool+dedup+rerank steps and computes pre/post metrics. Otherwise it computes standard metrics. Experiments consume pre-generated query files.
+
+**QueryGenerationConfig** (`experiments/query_generation.py`): Controls LLM-based query generation (model, prompt, sample memories). Query generation is a separate step that saves queries as JSON files, decoupled from experiment execution.
 
 **ExtractionConfig** (`memories/extractor.py`): Controls memory extraction format. `SituationFormat.SINGLE` produces single situation descriptions (for vector search), `SituationFormat.VARIANTS` produces 3 semicolon-separated variants (for FTS5).
 
@@ -81,21 +89,38 @@ notebooks/
 ```python
 from memory_retrieval.search.vector import VectorBackend
 from memory_retrieval.search.reranker import Reranker
+from memory_retrieval.experiments.query_generation import generate_all_queries, QueryGenerationConfig
 from memory_retrieval.experiments.runner import run_all_experiments, ExperimentConfig
 from memory_retrieval.infra.runs import get_latest_run
 
+run_dir = get_latest_run("phase1")
+vector_backend = VectorBackend()
+
+# Step 1: Generate queries (costs money — LLM API call)
+query_config = QueryGenerationConfig(
+    prompts_dir="data/prompts/phase1",
+    model="anthropic/claude-sonnet-4.5",
+)
+generate_all_queries(
+    test_cases_dir=str(run_dir / "test_cases"),
+    queries_dir=str(run_dir / "queries"),
+    config=query_config,
+    db_path=str(run_dir / "memories" / "memories.db"),
+    search_backend=vector_backend,
+)
+
+# Step 2: Run experiments (free — local search + metrics)
 config = ExperimentConfig(
-    search_backend=VectorBackend(),
+    search_backend=vector_backend,
     reranker=Reranker(),          # None for standard (no reranking) path
     rerank_top_n=4,
-    prompts_dir="data/prompts/phase2",
 )
-run_dir = get_latest_run("phase1")
 results = run_all_experiments(
-    str(run_dir / "test_cases"),
-    str(run_dir / "memories" / "memories.db"),
-    str(run_dir / "results"),
-    config,
+    test_cases_dir=str(run_dir / "test_cases"),
+    queries_dir=str(run_dir / "queries"),
+    db_path=str(run_dir / "memories" / "memories.db"),
+    results_dir=str(run_dir / "results"),
+    config=config,
 )
 ```
 
@@ -119,6 +144,7 @@ Each run contains a `run.json` with metadata:
     "build_memories": {"completed_at": "...", "count": 41},
     "db": {"completed_at": "...", "memory_count": 41},
     "test_cases": {"completed_at": "...", "count": 11},
+    "query_generation": {"completed_at": "...", "count": 11, "total_queries": 55},
     "experiment": {"completed_at": "...", "count": 11}
   }
 }
@@ -145,14 +171,18 @@ Each run contains a `run.json` with metadata:
    - Computes ground truth memory IDs by matching comment IDs
    - Creates self-contained test case files (skips PRs with no memories)
 
-5. **Retrieval Experiment** (`experiments/runner.py`):
-   - Loads test case with pre-computed ground truth
+5. **Query Generation** (`experiments/query_generation.py`):
    - Generates search queries via LLM from PR context and diff
+   - Saves query files as JSON in `queries/` directory (one per test case)
+   - Separate step from experiments — queries are generated once, experiments run many times
+
+6. **Retrieval Experiment** (`experiments/runner.py`):
+   - Loads test case and pre-generated queries
    - Searches using vector similarity, calculates recall/precision/F1
 
-6. **Reranking Experiment** (`experiments/runner.py` with `reranker` config):
+7. **Reranking Experiment** (`experiments/runner.py` with `reranker` config):
    - Can run independently (phase2.ipynb) or on Phase 1 data (phase1_reranking_comparison.ipynb)
-   - Generates queries, runs vector search
+   - Loads pre-generated queries, runs vector search
    - **Per-query reranking**: each query's results are reranked independently against that query using the cross-encoder (bge-reranker-v2-m3), then pooled and deduplicated by best rerank score
    - Takes top-N after pooling (default: 4)
    - Computes metrics before and after reranking for comparison
@@ -270,7 +300,7 @@ All metrics are **macro-averaged** (computed per test case, then averaged across
 | Lever | Where | Notes |
 |---|---|---|
 | Query generation prompt | `data/prompts/<phase>/memory-query/` | Controls what queries the LLM generates from the PR |
-| Query generation model | `ExperimentConfig.model` | Smarter models generate better queries |
+| Query generation model | `QueryGenerationConfig.model` | Smarter models generate better queries |
 | Memory extraction prompt | `data/prompts/<phase>/situation/`, `lesson/` | Controls memory quality (situation + lesson text) |
 | Number of queries | Prompt-driven | More queries = broader recall, more noise |
 | Search limit per query | `ExperimentConfig.search_limit` | How many candidates per query (default: 20) |

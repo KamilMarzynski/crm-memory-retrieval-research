@@ -74,6 +74,7 @@ def create_run(
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "memories").mkdir(exist_ok=True)
     (run_dir / "test_cases").mkdir(exist_ok=True)
+    (run_dir / "queries").mkdir(exist_ok=True)
     (run_dir / "results").mkdir(exist_ok=True)
 
     metadata: dict[str, Any] = {
