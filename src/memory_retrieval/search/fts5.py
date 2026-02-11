@@ -22,12 +22,12 @@ from memory_retrieval.search.db_utils import (
 class FTS5Backend:
     def create_database(self, db_path: str) -> None:
         with get_db_connection(db_path) as conn:
-            cur = conn.cursor()
+            cursor = conn.cursor()
 
-            cur.execute("DROP TABLE IF EXISTS memories_fts")
-            cur.execute("DROP TABLE IF EXISTS memories")
+            cursor.execute("DROP TABLE IF EXISTS memories_fts")
+            cursor.execute("DROP TABLE IF EXISTS memories")
 
-            cur.execute(f"""
+            cursor.execute(f"""
                 CREATE TABLE memories (
                     {FIELD_ID} TEXT PRIMARY KEY,
                     {FIELD_VARIANTS} TEXT NOT NULL,
@@ -37,14 +37,14 @@ class FTS5Backend:
                 )
             """)
 
-            cur.execute("""
+            cursor.execute("""
                 CREATE VIRTUAL TABLE memories_fts USING fts5(
                     situation_variant,
                     memory_id UNINDEXED
                 )
             """)
 
-            cur.execute(f"""
+            cursor.execute(f"""
                 CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN
                     INSERT INTO memories_fts(situation_variant, memory_id)
                     SELECT value, new.{FIELD_ID}
@@ -52,13 +52,13 @@ class FTS5Backend:
                 END
             """)
 
-            cur.execute(f"""
+            cursor.execute(f"""
                 CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN
                     DELETE FROM memories_fts WHERE memory_id = old.{FIELD_ID};
                 END
             """)
 
-            cur.execute(f"""
+            cursor.execute(f"""
                 CREATE TRIGGER memories_au AFTER UPDATE ON memories BEGIN
                     DELETE FROM memories_fts WHERE memory_id = old.{FIELD_ID};
                     INSERT INTO memories_fts(situation_variant, memory_id)
@@ -69,36 +69,36 @@ class FTS5Backend:
 
     def insert_memories(self, db_path: str, memories: list[dict[str, Any]]) -> int:
         with get_db_connection(db_path) as conn:
-            cur = conn.cursor()
+            cursor = conn.cursor()
             inserted = 0
 
-            for mem in memories:
+            for memory in memories:
                 try:
-                    cur.execute(
+                    cursor.execute(
                         f"""
                         INSERT OR REPLACE INTO memories
                         ({FIELD_ID}, {FIELD_VARIANTS}, {FIELD_LESSON}, {FIELD_METADATA}, {FIELD_SOURCE})
                         VALUES (?, ?, ?, ?, ?)
                         """,
                         (
-                            mem[FIELD_ID],
-                            serialize_json_field(mem.get(FIELD_VARIANTS)),
-                            mem[FIELD_LESSON],
-                            serialize_json_field(mem.get(FIELD_METADATA)),
-                            serialize_json_field(mem.get(FIELD_SOURCE)),
+                            memory[FIELD_ID],
+                            serialize_json_field(memory.get(FIELD_VARIANTS)),
+                            memory[FIELD_LESSON],
+                            serialize_json_field(memory.get(FIELD_METADATA)),
+                            serialize_json_field(memory.get(FIELD_SOURCE)),
                         ),
                     )
                     inserted += 1
                 except (KeyError, sqlite3.Error) as e:
-                    print(f"Warning: Skipping memory {mem.get(FIELD_ID, '?')}: {e}")
+                    print(f"Warning: Skipping memory {memory.get(FIELD_ID, '?')}: {e}")
 
         return inserted
 
     def search(self, db_path: str, query: str, limit: int = 10) -> list[SearchResult]:
         with get_db_connection(db_path) as conn:
             conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
-            cur.execute(
+            cursor = conn.cursor()
+            cursor.execute(
                 f"""
                 SELECT m.{FIELD_ID}, m.{FIELD_VARIANTS}, m.{FIELD_LESSON},
                        m.{FIELD_METADATA}, m.{FIELD_SOURCE},
@@ -113,17 +113,17 @@ class FTS5Backend:
 
             seen_ids: set[str] = set()
             results: list[SearchResult] = []
-            for row in cur.fetchall():
-                mem_id = row[FIELD_ID]
-                if mem_id in seen_ids:
+            for row in cursor.fetchall():
+                memory_id = row[FIELD_ID]
+                if memory_id in seen_ids:
                     continue
-                seen_ids.add(mem_id)
+                seen_ids.add(memory_id)
 
                 variants = json.loads(row[FIELD_VARIANTS]) if row[FIELD_VARIANTS] else []
                 rank = row[FIELD_RANK]
 
                 results.append(SearchResult(
-                    id=mem_id,
+                    id=memory_id,
                     situation=variants[0] if variants else "",
                     lesson=row[FIELD_LESSON],
                     metadata=deserialize_json_field(row[FIELD_METADATA]),
@@ -152,15 +152,15 @@ class FTS5Backend:
 
     def get_memory_count(self, db_path: str) -> int:
         with get_db_connection(db_path) as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM memories")
-            return cur.fetchone()[0]
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM memories")
+            return cursor.fetchone()[0]
 
     def get_memory_by_id(self, db_path: str, memory_id: str) -> dict[str, Any] | None:
         with get_db_connection(db_path) as conn:
             conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
-            cur.execute(
+            cursor = conn.cursor()
+            cursor.execute(
                 f"""
                 SELECT {FIELD_ID}, {FIELD_VARIANTS}, {FIELD_LESSON},
                        {FIELD_METADATA}, {FIELD_SOURCE}
@@ -168,7 +168,7 @@ class FTS5Backend:
                 """,
                 (memory_id,),
             )
-            row = cur.fetchone()
+            row = cursor.fetchone()
             if row is None:
                 return None
 
