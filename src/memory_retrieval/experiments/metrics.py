@@ -6,6 +6,16 @@ def compute_metrics(
     retrieved_ids: set[str],
     ground_truth_ids: set[str],
 ) -> dict[str, float]:
+    """Compute precision, recall, and F1 score for retrieval results.
+
+    Args:
+        retrieved_ids: Set of memory IDs that were retrieved by the system.
+        ground_truth_ids: Set of memory IDs that should have been retrieved (ground truth).
+
+    Returns:
+        Dictionary with 'recall', 'precision', and 'f1' scores (all rounded to 4 decimals).
+        Returns zeros if ground_truth_ids is empty.
+    """
     if not ground_truth_ids:
         return {"recall": 0.0, "precision": 0.0, "f1": 0.0}
 
@@ -22,6 +32,22 @@ def compute_metrics(
 
 
 def analyze_query_performance(query_results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Analyze per-query performance metrics across all queries in an experiment.
+
+    Args:
+        query_results: List of query result dictionaries, each containing:
+            - query: The query text
+            - results: List of search results with is_ground_truth and distance fields
+
+    Returns:
+        Dictionary with aggregate query statistics:
+            - queries_with_hits: Count of queries that retrieved at least one ground truth memory
+            - total_queries: Total number of queries analyzed
+            - query_hit_rate: Fraction of queries with hits
+            - best_queries: Top 3 queries by number of ground truth hits
+            - worst_queries: Bottom 3 queries by number of ground truth hits
+            - avg_word_count: Average length of queries in words
+    """
     query_stats = []
 
     for query_result in query_results:

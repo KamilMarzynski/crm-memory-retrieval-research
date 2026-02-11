@@ -20,7 +20,17 @@ from memory_retrieval.search.db_utils import (
 
 
 class FTS5Backend:
+    """Full-text search backend using SQLite FTS5 for keyword-based retrieval."""
+
     def create_database(self, db_path: str) -> None:
+        """Create database schema with memories table and FTS5 index.
+
+        Sets up automatic triggers to sync FTS5 index with the memories table,
+        handling situation variants (multiple text representations per memory).
+
+        Args:
+            db_path: Path to the SQLite database file.
+        """
         with get_db_connection(db_path) as conn:
             cursor = conn.cursor()
 
@@ -68,6 +78,15 @@ class FTS5Backend:
             """)
 
     def insert_memories(self, db_path: str, memories: list[dict[str, Any]]) -> int:
+        """Insert memories into the database (FTS5 index updated via triggers).
+
+        Args:
+            db_path: Path to the SQLite database file.
+            memories: List of memory dictionaries with id, variants, lesson, metadata, and source fields.
+
+        Returns:
+            Number of memories successfully inserted.
+        """
         with get_db_connection(db_path) as conn:
             cursor = conn.cursor()
             inserted = 0
@@ -95,6 +114,19 @@ class FTS5Backend:
         return inserted
 
     def search(self, db_path: str, query: str, limit: int = 10) -> list[SearchResult]:
+        """Search for memories using FTS5 full-text search with BM25 ranking.
+
+        Deduplicates results since each memory can have multiple situation variants
+        that may all match the query.
+
+        Args:
+            db_path: Path to the SQLite database file.
+            query: FTS5 search query (supports operators like AND, OR, NOT, NEAR).
+            limit: Maximum number of unique memories to return.
+
+        Returns:
+            List of SearchResult objects sorted by BM25 rank (best matches first).
+        """
         with get_db_connection(db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
@@ -139,6 +171,12 @@ class FTS5Backend:
             return results
 
     def rebuild_database(self, db_path: str, memories_dir: str) -> None:
+        """Rebuild the entire database from scratch by loading memories.
+
+        Args:
+            db_path: Path to the SQLite database file to create/overwrite.
+            memories_dir: Directory containing JSONL memory files.
+        """
         print(f"Creating database at {db_path}...")
         self.create_database(db_path)
 
@@ -151,12 +189,29 @@ class FTS5Backend:
         print(f"Inserted {count} memories into database")
 
     def get_memory_count(self, db_path: str) -> int:
+        """Get the total number of memories in the database.
+
+        Args:
+            db_path: Path to the SQLite database file.
+
+        Returns:
+            Total count of memories.
+        """
         with get_db_connection(db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM memories")
             return cursor.fetchone()[0]
 
     def get_memory_by_id(self, db_path: str, memory_id: str) -> dict[str, Any] | None:
+        """Retrieve a specific memory by its ID.
+
+        Args:
+            db_path: Path to the SQLite database file.
+            memory_id: The unique memory identifier.
+
+        Returns:
+            Memory dictionary with all fields including variants, or None if not found.
+        """
         with get_db_connection(db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()

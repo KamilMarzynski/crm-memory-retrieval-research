@@ -69,7 +69,14 @@ def get_confidence_from_distance(distance: float) -> str:
 
 
 class VectorBackend:
+    """Vector search backend using sqlite-vec for embedding-based retrieval."""
+
     def create_database(self, db_path: str) -> None:
+        """Create database schema with memories table and vector index.
+
+        Args:
+            db_path: Path to the SQLite database file.
+        """
         with get_db_connection(db_path) as conn:
             cursor = conn.cursor()
 
@@ -94,6 +101,15 @@ class VectorBackend:
             """)
 
     def insert_memories(self, db_path: str, memories: list[dict[str, Any]]) -> int:
+        """Insert memories into the database and generate embeddings.
+
+        Args:
+            db_path: Path to the SQLite database file.
+            memories: List of memory dictionaries with id, situation, lesson, metadata, and source fields.
+
+        Returns:
+            Number of memories successfully inserted.
+        """
         with get_db_connection(db_path) as conn:
             cursor = conn.cursor()
             inserted = 0
@@ -136,6 +152,16 @@ class VectorBackend:
         return inserted
 
     def search(self, db_path: str, query: str, limit: int = 10) -> list[SearchResult]:
+        """Search for memories using vector similarity.
+
+        Args:
+            db_path: Path to the SQLite database file.
+            query: Search query text to embed and match against.
+            limit: Maximum number of results to return (uses k parameter in sqlite-vec).
+
+        Returns:
+            List of SearchResult objects sorted by cosine distance (ascending).
+        """
         query_embedding = get_embedding(query)
 
         with get_db_connection(db_path) as conn:
@@ -172,6 +198,12 @@ class VectorBackend:
             return results
 
     def rebuild_database(self, db_path: str, memories_dir: str) -> None:
+        """Rebuild the entire database from scratch by loading memories and generating embeddings.
+
+        Args:
+            db_path: Path to the SQLite database file to create/overwrite.
+            memories_dir: Directory containing JSONL memory files.
+        """
         print(f"Creating database at {db_path}...")
         self.create_database(db_path)
 
@@ -184,12 +216,29 @@ class VectorBackend:
         print(f"Inserted {count} memories into database")
 
     def get_memory_count(self, db_path: str) -> int:
+        """Get the total number of memories in the database.
+
+        Args:
+            db_path: Path to the SQLite database file.
+
+        Returns:
+            Total count of memories.
+        """
         with get_db_connection(db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM memories")
             return cursor.fetchone()[0]
 
     def get_memory_by_id(self, db_path: str, memory_id: str) -> dict[str, Any] | None:
+        """Retrieve a specific memory by its ID.
+
+        Args:
+            db_path: Path to the SQLite database file.
+            memory_id: The unique memory identifier.
+
+        Returns:
+            Memory dictionary with all fields, or None if not found.
+        """
         with get_db_connection(db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
@@ -213,6 +262,15 @@ class VectorBackend:
             }
 
     def get_sample_memories(self, db_path: str, limit: int = 5) -> list[dict[str, Any]]:
+        """Get the first N memories from the database (not randomized).
+
+        Args:
+            db_path: Path to the SQLite database file.
+            limit: Maximum number of memories to return.
+
+        Returns:
+            List of memory dictionaries.
+        """
         with get_db_connection(db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
@@ -238,6 +296,15 @@ class VectorBackend:
     def get_random_sample_memories(
         self, db_path: str, n: int = 5
     ) -> list[dict[str, Any]]:
+        """Get N random memories from the database for use in prompt examples.
+
+        Args:
+            db_path: Path to the SQLite database file.
+            n: Number of random memories to return.
+
+        Returns:
+            List of memory dictionaries (id, situation, lesson only).
+        """
         with get_db_connection(db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
