@@ -65,13 +65,13 @@ def get_ground_truth_memory_ids(
     raw_path: str, all_memories: list[dict[str, Any]]
 ) -> set[str]:
     raw_data = load_json(raw_path)
-    comment_ids = {c.get("id") for c in raw_data.get("code_review_comments", [])}
+    comment_ids = {comment.get("id") for comment in raw_data.get("code_review_comments", [])}
 
     ground_truth_ids: set[str] = set()
-    for mem in all_memories:
-        source_comment_id = mem.get("metadata", {}).get("source_comment_id")
+    for memory in all_memories:
+        source_comment_id = memory.get("metadata", {}).get("source_comment_id")
         if source_comment_id in comment_ids:
-            ground_truth_ids.add(mem["id"])
+            ground_truth_ids.add(memory["id"])
 
     return ground_truth_ids
 
