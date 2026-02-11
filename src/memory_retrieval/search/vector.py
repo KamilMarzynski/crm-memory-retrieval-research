@@ -71,12 +71,12 @@ def get_confidence_from_distance(distance: float) -> str:
 class VectorBackend:
     def create_database(self, db_path: str) -> None:
         with get_db_connection(db_path) as conn:
-            cur = conn.cursor()
+            cursor = conn.cursor()
 
-            cur.execute("DROP TABLE IF EXISTS vec_memories")
-            cur.execute("DROP TABLE IF EXISTS memories")
+            cursor.execute("DROP TABLE IF EXISTS vec_memories")
+            cursor.execute("DROP TABLE IF EXISTS memories")
 
-            cur.execute(f"""
+            cursor.execute(f"""
                 CREATE TABLE memories (
                     {FIELD_ID} TEXT PRIMARY KEY,
                     {FIELD_SITUATION} TEXT NOT NULL,
@@ -86,7 +86,7 @@ class VectorBackend:
                 )
             """)
 
-            cur.execute(f"""
+            cursor.execute(f"""
                 CREATE VIRTUAL TABLE vec_memories USING vec0(
                     memory_id TEXT PRIMARY KEY,
                     situation_embedding float[{VECTOR_DIMENSIONS}]
@@ -95,43 +95,43 @@ class VectorBackend:
 
     def insert_memories(self, db_path: str, memories: list[dict[str, Any]]) -> int:
         with get_db_connection(db_path) as conn:
-            cur = conn.cursor()
+            cursor = conn.cursor()
             inserted = 0
 
-            for i, mem in enumerate(memories):
-                mem_id = mem[FIELD_ID]
-                situation = mem[FIELD_SITUATION]
+            for i, memory in enumerate(memories):
+                memory_id = memory[FIELD_ID]
+                situation = memory[FIELD_SITUATION]
 
                 try:
-                    print(f"  [{i + 1}/{len(memories)}] Embedding {mem_id}...")
+                    print(f"  [{i + 1}/{len(memories)}] Embedding {memory_id}...")
                     embedding = get_embedding(situation)
 
-                    cur.execute(
+                    cursor.execute(
                         f"""
                         INSERT OR REPLACE INTO memories
                         ({FIELD_ID}, {FIELD_SITUATION}, {FIELD_LESSON}, {FIELD_METADATA}, {FIELD_SOURCE})
                         VALUES (?, ?, ?, ?, ?)
                         """,
                         (
-                            mem_id,
+                            memory_id,
                             situation,
-                            mem[FIELD_LESSON],
-                            serialize_json_field(mem.get(FIELD_METADATA)),
-                            serialize_json_field(mem.get(FIELD_SOURCE)),
+                            memory[FIELD_LESSON],
+                            serialize_json_field(memory.get(FIELD_METADATA)),
+                            serialize_json_field(memory.get(FIELD_SOURCE)),
                         ),
                     )
 
-                    cur.execute(
+                    cursor.execute(
                         """
                         INSERT OR REPLACE INTO vec_memories (memory_id, situation_embedding)
                         VALUES (?, ?)
                         """,
-                        (mem_id, _serialize_f32(embedding)),
+                        (memory_id, _serialize_f32(embedding)),
                     )
 
                     inserted += 1
                 except (KeyError, sqlite3.Error, ollama.ResponseError) as e:
-                    print(f"  Warning: Skipping memory {mem_id}: {e}")
+                    print(f"  Warning: Skipping memory {memory_id}: {e}")
 
         return inserted
 
@@ -140,8 +140,8 @@ class VectorBackend:
 
         with get_db_connection(db_path) as conn:
             conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
-            cur.execute(
+            cursor = conn.cursor()
+            cursor.execute(
                 f"""
                 SELECT m.{FIELD_ID}, m.{FIELD_SITUATION}, m.{FIELD_LESSON},
                        m.{FIELD_METADATA}, m.{FIELD_SOURCE},
@@ -156,7 +156,7 @@ class VectorBackend:
             )
 
             results: list[SearchResult] = []
-            for row in cur.fetchall():
+            for row in cursor.fetchall():
                 distance = row[FIELD_DISTANCE]
                 results.append(SearchResult(
                     id=row[FIELD_ID],
@@ -185,15 +185,15 @@ class VectorBackend:
 
     def get_memory_count(self, db_path: str) -> int:
         with get_db_connection(db_path) as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM memories")
-            return cur.fetchone()[0]
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM memories")
+            return cursor.fetchone()[0]
 
     def get_memory_by_id(self, db_path: str, memory_id: str) -> dict[str, Any] | None:
         with get_db_connection(db_path) as conn:
             conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
-            cur.execute(
+            cursor = conn.cursor()
+            cursor.execute(
                 f"""
                 SELECT {FIELD_ID}, {FIELD_SITUATION}, {FIELD_LESSON},
                        {FIELD_METADATA}, {FIELD_SOURCE}
@@ -201,7 +201,7 @@ class VectorBackend:
                 """,
                 (memory_id,),
             )
-            row = cur.fetchone()
+            row = cursor.fetchone()
             if row is None:
                 return None
             return {
@@ -215,8 +215,8 @@ class VectorBackend:
     def get_sample_memories(self, db_path: str, limit: int = 5) -> list[dict[str, Any]]:
         with get_db_connection(db_path) as conn:
             conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
-            cur.execute(
+            cursor = conn.cursor()
+            cursor.execute(
                 f"""
                 SELECT {FIELD_ID}, {FIELD_SITUATION}, {FIELD_LESSON},
                        {FIELD_METADATA}, {FIELD_SOURCE}
@@ -232,7 +232,7 @@ class VectorBackend:
                     FIELD_METADATA: deserialize_json_field(row[FIELD_METADATA]),
                     FIELD_SOURCE: deserialize_json_field(row[FIELD_SOURCE]),
                 }
-                for row in cur.fetchall()
+                for row in cursor.fetchall()
             ]
 
     def get_random_sample_memories(
@@ -240,8 +240,8 @@ class VectorBackend:
     ) -> list[dict[str, Any]]:
         with get_db_connection(db_path) as conn:
             conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
-            cur.execute(
+            cursor = conn.cursor()
+            cursor.execute(
                 f"""
                 SELECT {FIELD_ID}, {FIELD_SITUATION}, {FIELD_LESSON}
                 FROM memories ORDER BY RANDOM() LIMIT ?
@@ -254,5 +254,5 @@ class VectorBackend:
                     FIELD_SITUATION: row[FIELD_SITUATION],
                     FIELD_LESSON: row[FIELD_LESSON],
                 }
-                for row in cur.fetchall()
+                for row in cursor.fetchall()
             ]
