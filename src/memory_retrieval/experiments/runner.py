@@ -55,33 +55,33 @@ def _pool_and_deduplicate(
     query_results: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Pool results from all queries and deduplicate by memory ID."""
-    best: dict[str, dict[str, Any]] = {}
+    best_by_memory_id: dict[str, dict[str, Any]] = {}
 
-    for qr in query_results:
-        for r in qr.get("results", []):
-            mid = r["id"]
-            current_dist = r.get("distance", float("inf"))
-            best_dist = best[mid].get("distance", float("inf")) if mid in best else float("inf")
-            if current_dist < best_dist:
-                best[mid] = r
+    for query_result in query_results:
+        for result in query_result.get("results", []):
+            memory_id = result["id"]
+            current_distance = result.get("distance", float("inf"))
+            best_distance = best_by_memory_id[memory_id].get("distance", float("inf")) if memory_id in best_by_memory_id else float("inf")
+            if current_distance < best_distance:
+                best_by_memory_id[memory_id] = result
 
-    return sorted(best.values(), key=lambda x: x.get("distance", 0))
+    return sorted(best_by_memory_id.values(), key=lambda x: x.get("distance", 0))
 
 
 def _pool_and_deduplicate_by_rerank_score(
     per_query_reranked: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Pool reranked results from all queries, keeping the highest rerank score per memory."""
-    best: dict[str, dict[str, Any]] = {}
+    best_by_memory_id: dict[str, dict[str, Any]] = {}
 
-    for qr in per_query_reranked:
-        for r in qr["reranked"]:
-            mid = r["id"]
-            score = r.get(FIELD_RERANK_SCORE, float("-inf"))
-            if mid not in best or score > best[mid].get(FIELD_RERANK_SCORE, float("-inf")):
-                best[mid] = r
+    for query_result in per_query_reranked:
+        for result in query_result["reranked"]:
+            memory_id = result["id"]
+            rerank_score = result.get(FIELD_RERANK_SCORE, float("-inf"))
+            if memory_id not in best_by_memory_id or rerank_score > best_by_memory_id[memory_id].get(FIELD_RERANK_SCORE, float("-inf")):
+                best_by_memory_id[memory_id] = result
 
-    return sorted(best.values(), key=lambda x: x.get(FIELD_RERANK_SCORE, 0), reverse=True)
+    return sorted(best_by_memory_id.values(), key=lambda x: x.get(FIELD_RERANK_SCORE, 0), reverse=True)
 
 
 def _run_rerank_strategy(
@@ -94,19 +94,19 @@ def _run_rerank_strategy(
 ) -> dict[str, Any]:
     """Run reranking for a single text strategy and return metrics + results."""
     all_reranked_per_query = []
-    for qr in query_results:
+    for query_result in query_results:
         reranked_for_query = reranker.rerank(
-            qr["query"], qr["results"], top_n=None,
+            query_result["query"], query_result["results"], top_n=None,
             text_field=text_field, text_fn=text_fn,
         )
         all_reranked_per_query.append({
-            "query": qr["query"],
+            "query": query_result["query"],
             "reranked": reranked_for_query,
         })
 
     pooled_reranked = _pool_and_deduplicate_by_rerank_score(all_reranked_per_query)
     top_reranked = pooled_reranked[:rerank_top_n]
-    reranked_ids = {r["id"] for r in top_reranked}
+    reranked_ids = {result["id"] for result in top_reranked}
     post_metrics = compute_metrics(reranked_ids, ground_truth_ids)
 
     return {
@@ -118,14 +118,14 @@ def _run_rerank_strategy(
         },
         "reranked_results": [
             {
-                "id": r["id"],
-                "rerank_score": r[FIELD_RERANK_SCORE],
-                "distance": r.get(FIELD_DISTANCE, r.get("distance", 0)),
-                "situation": r.get(FIELD_SITUATION, r.get("situation", "")),
-                "lesson": r.get("lesson", ""),
-                "is_ground_truth": r["id"] in ground_truth_ids,
+                "id": result["id"],
+                "rerank_score": result[FIELD_RERANK_SCORE],
+                "distance": result.get(FIELD_DISTANCE, result.get("distance", 0)),
+                "situation": result.get(FIELD_SITUATION, result.get("situation", "")),
+                "lesson": result.get("lesson", ""),
+                "is_ground_truth": result["id"] in ground_truth_ids,
             }
-            for r in pooled_reranked
+            for result in pooled_reranked
         ],
         "retrieved_ground_truth_ids": sorted(list(reranked_ids & ground_truth_ids)),
         "missed_ground_truth_ids": sorted(list(ground_truth_ids - reranked_ids)),
@@ -171,8 +171,8 @@ def run_experiment(
     if config.use_sample_memories and query_prompt.version >= "2.0.0":
         sample_memories = _get_random_sample_memories(config.search_backend, db_path, n=5)
         memory_examples = "\n".join([
-            f'- "{m[FIELD_SITUATION]}"'
-            for m in sample_memories[:5]
+            f'- "{memory[FIELD_SITUATION]}"'
+            for memory in sample_memories[:5]
         ])
         print(f"Using prompt {query_prompt.version_tag} with {len(sample_memories)} sample memories")
     else:
@@ -203,30 +203,30 @@ def run_experiment(
 
     for query in queries:
         results = config.search_backend.search(db_path, query, limit=config.search_limit)
-        retrieved_ids = {r.id for r in results}
+        retrieved_ids = {result.id for result in results}
         all_retrieved_ids.update(retrieved_ids)
 
-        qr_results = []
-        for r in results:
+        query_result_entries = []
+        for result in results:
             result_entry: dict[str, Any] = {
-                "id": r.id,
-                "situation": r.situation,
-                "lesson": r.lesson,
-                "is_ground_truth": r.id in ground_truth_ids,
+                "id": result.id,
+                "situation": result.situation,
+                "lesson": result.lesson,
+                "is_ground_truth": result.id in ground_truth_ids,
             }
             if is_vector:
-                result_entry["distance"] = r.raw_score
-                result_entry["confidence"] = get_confidence_from_distance(r.raw_score)
+                result_entry["distance"] = result.raw_score
+                result_entry["confidence"] = get_confidence_from_distance(result.raw_score)
             else:
-                result_entry["rank"] = r.raw_score
+                result_entry["rank"] = result.raw_score
 
-            qr_results.append(result_entry)
+            query_result_entries.append(result_entry)
 
         query_results.append({
             "query": query,
             "word_count": len(query.split()),
             "result_count": len(results),
-            "results": qr_results,
+            "results": query_result_entries,
         })
 
     # --- Build result structure ---
@@ -247,7 +247,7 @@ def run_experiment(
     }
 
     if sample_memories:
-        result["sample_memories_used"] = [m[FIELD_SITUATION] for m in sample_memories]
+        result["sample_memories_used"] = [memory[FIELD_SITUATION] for memory in sample_memories]
 
     if config.reranker is not None:
         # --- Reranking path ---
@@ -257,10 +257,10 @@ def run_experiment(
 
         # Pre-rerank metrics
         pre_rerank_threshold_ids: set[str] = {
-            r["id"]
-            for qr in query_results
-            for r in qr["results"]
-            if r.get("distance", 0) <= config.distance_threshold
+            result["id"]
+            for query_result in query_results
+            for result in query_result["results"]
+            if result.get("distance", 0) <= config.distance_threshold
         }
         pre_rerank_metrics = compute_metrics(pre_rerank_threshold_ids, ground_truth_ids)
 
@@ -320,10 +320,10 @@ def run_experiment(
 
         if is_vector:
             filtered_retrieved_ids: set[str] = {
-                r["id"]
-                for qr in query_results
-                for r in qr["results"]
-                if r.get("distance", 0) <= config.distance_threshold
+                result["id"]
+                for query_result in query_results
+                for result in query_result["results"]
+                if result.get("distance", 0) <= config.distance_threshold
             }
         else:
             filtered_retrieved_ids = all_retrieved_ids
@@ -369,20 +369,20 @@ def run_all_experiments(
     test_case_files = sorted(Path(test_cases_dir).glob("*.json"))
     all_results: list[dict[str, Any]] = []
 
-    for i, tc_file in enumerate(test_case_files):
-        print(f"\n[{i + 1}/{len(test_case_files)}] Processing {tc_file.name}")
+    for i, test_case_file in enumerate(test_case_files):
+        print(f"\n[{i + 1}/{len(test_case_files)}] Processing {test_case_file.name}")
 
         try:
             result = run_experiment(
-                str(tc_file),
+                str(test_case_file),
                 db_path=db_path,
                 results_dir=results_dir,
                 config=config,
             )
             all_results.append(result)
         except Exception as e:
-            print(f"Error processing {tc_file.name}: {e}")
-            all_results.append({"test_case_file": tc_file.name, "error": str(e)})
+            print(f"Error processing {test_case_file.name}: {e}")
+            all_results.append({"test_case_file": test_case_file.name, "error": str(e)})
 
         if i < len(test_case_files) - 1:
             time.sleep(config.sleep_between)
@@ -396,13 +396,13 @@ def run_all_experiments(
         success_key = "post_rerank_metrics"
     else:
         success_key = "metrics"
-    successful = [r for r in all_results if success_key in r]
+    successful = [result for result in all_results if success_key in result]
 
     if config.reranker is not None:
         if successful:
             avg_pre = {
-                m: sum(r["pre_rerank_metrics"][m] for r in successful) / len(successful)
-                for m in ["recall", "precision", "f1"]
+                metric: sum(result["pre_rerank_metrics"][metric] for result in successful) / len(successful)
+                for metric in ["recall", "precision", "f1"]
             }
 
             print(f"Experiments run: {len(successful)}")
@@ -411,7 +411,7 @@ def run_all_experiments(
             strategy_names = list((config.rerank_text_strategies or {"default": None}).keys())
             has_strategies = "rerank_strategies" in successful[0]
 
-            avg_pre_n = sum(r["pre_rerank_metrics"]["total_within_threshold"] for r in successful) / len(successful)
+            avg_pre_n = sum(result["pre_rerank_metrics"]["total_within_threshold"] for result in successful) / len(successful)
 
             if has_strategies:
                 # Multi-strategy summary
@@ -431,8 +431,8 @@ def run_all_experiments(
                     row = f"{metric:<12} {avg_pre[metric]:>12.3f}"
                     for name in strategy_names:
                         avg_val = sum(
-                            r["rerank_strategies"][name]["post_rerank_metrics"][metric]
-                            for r in successful
+                            result["rerank_strategies"][name]["post_rerank_metrics"][metric]
+                            for result in successful
                         ) / len(successful)
                         row += f" {avg_val:>24.3f}"
                     print(row)
@@ -440,8 +440,8 @@ def run_all_experiments(
             else:
                 # Single strategy summary (backward compat)
                 avg_post = {
-                    m: sum(r["post_rerank_metrics"][m] for r in successful) / len(successful)
-                    for m in ["recall", "precision", "f1"]
+                    metric: sum(result["post_rerank_metrics"][metric] for result in successful) / len(successful)
+                    for metric in ["recall", "precision", "f1"]
                 }
                 print()
                 print(f"{'Metric':<12} {'All cands':>12} {'Top-' + str(config.rerank_top_n):>12}")
@@ -456,11 +456,11 @@ def run_all_experiments(
             print("No successful experiments")
     else:
         if successful:
-            avg_recall = sum(r["metrics"]["recall"] for r in successful) / len(successful)
-            avg_precision = sum(r["metrics"]["precision"] for r in successful) / len(successful)
-            avg_f1 = sum(r["metrics"]["f1"] for r in successful) / len(successful)
-            total_gt = sum(r["ground_truth"]["count"] for r in successful)
-            total_retrieved = sum(r["metrics"]["ground_truth_retrieved"] for r in successful)
+            avg_recall = sum(result["metrics"]["recall"] for result in successful) / len(successful)
+            avg_precision = sum(result["metrics"]["precision"] for result in successful) / len(successful)
+            avg_f1 = sum(result["metrics"]["f1"] for result in successful) / len(successful)
+            total_gt = sum(result["ground_truth"]["count"] for result in successful)
+            total_retrieved = sum(result["metrics"]["ground_truth_retrieved"] for result in successful)
 
             print(f"Experiments run: {len(successful)}")
             print(f"Total ground truth memories: {total_gt}")
