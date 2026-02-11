@@ -170,6 +170,66 @@ Each run contains a `run.json` with metadata:
 }
 ```
 
+## Code Style & Quality Standards
+
+### Variable Naming (CRITICAL)
+
+**NEVER use cryptic abbreviations or single-letter variable names.** This codebase prioritizes readability over brevity. Always use descriptive, self-documenting variable names.
+
+**Forbidden patterns:**
+```python
+# ❌ NEVER DO THIS
+r = get_result()           # What is 'r'? result? rank? response?
+qr = query_results         # Ambiguous - query_result singular or plural?
+mid = memory["id"]         # Unclear - could be anything with 'mid'
+d = calculate_distance()   # Single letter tells nothing
+p, r, f1 = metrics         # Unpacking to cryptic names
+tc_id = test_case["id"]    # Unnecessary abbreviation
+gt_ids = ground_truth      # 'gt' requires mental translation
+```
+
+**Required patterns:**
+```python
+# ✅ ALWAYS DO THIS
+result = get_result()
+query_result = query_results[0]  # Singular, not 'qr'
+memory_id = memory["id"]
+distance = calculate_distance()
+precision, recall, f1_score = metrics
+test_case_id = test_case["id"]
+ground_truth_ids = ground_truth
+```
+
+**Specific naming conventions for this project:**
+- `result` NOT `r` (for search results, experiment results, etc.)
+- `query_result` NOT `qr` (for individual query result objects)
+- `memory_id` NOT `mid` (for memory identifiers)
+- `distance` NOT `d` (for vector distances)
+- `threshold` NOT `t` (for distance/score thresholds)
+- `precision`, `recall`, `f1_score` NOT `p`, `r`, `f1`
+- `reciprocal_rank` NOT `rr` (for MRR calculations)
+- `experiment`, `experiment_data`, `experiment_result` NOT `exp`, `ed`, `er`
+- `ground_truth_ids` NOT `gt_ids` (spell out "ground_truth")
+- `test_case_id` NOT `tc_id` (spell out "test_case")
+- `num_*` NOT `n_*` or `n` (e.g., `num_queries`, `num_memories`)
+- Collections: `precisions`, `recalls`, `f1_scores` NOT `ps`, `rs`, `f1s`
+
+**Acceptable short names (Python conventions):**
+- `i`, `j`, `k` in simple `for i in range(...)` loops ONLY
+- `_` for intentionally unused values
+- Database cursors can be `cursor` (NOT `cur`)
+
+**Rationale:** Research code is read far more often than written. Code that takes 30 seconds longer to write but saves 5 minutes of comprehension time for every reader (including future you) is a massive win. Cryptic abbreviations create maintenance burden, slow development, and lead to bugs.
+
+### Code Quality Enforcement
+
+All code must be readable and maintainable:
+- Descriptive variable names (see above)
+- Clear function names that describe what they do
+- Type hints where helpful for clarity
+- Comments explaining *why*, not *what* (code should be self-documenting)
+- Consistent formatting via project standards
+
 ## Research Context & Experimentation Guide
 
 ### What This Research Is About
