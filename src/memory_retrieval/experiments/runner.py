@@ -300,20 +300,19 @@ def run_experiment(
             }
 
         # Print summary
-        print(f"\nPRE-RERANK METRICS (threshold={config.distance_threshold}):")
+        print(f"\nALL CANDIDATES within distance {config.distance_threshold} ({len(pre_rerank_threshold_ids)} results):")
         print(f"  Recall:    {pre_rerank_metrics['recall']:.1%}")
         print(f"  Precision: {pre_rerank_metrics['precision']:.1%}")
         print(f"  F1 Score:  {pre_rerank_metrics['f1']:.3f}")
 
         for strategy_name, strategy in strategies_results.items():
             post_metrics = strategy["post_rerank_metrics"]
-            label = f"POST-RERANK [{strategy_name}]" if len(strategies) > 1 else f"POST-RERANK"
-            print(f"\n{label} (top-{config.rerank_top_n}):")
+            label = f"RERANKED TOP-{config.rerank_top_n} [{strategy_name}]" if len(strategies) > 1 else f"RERANKED TOP-{config.rerank_top_n}"
+            print(f"\n{label} ({post_metrics['reranked_count']} results):")
             print(f"  Recall:    {post_metrics['recall']:.1%}")
             print(f"  Precision: {post_metrics['precision']:.1%}")
             print(f"  F1 Score:  {post_metrics['f1']:.3f}")
-            f1_delta = post_metrics["f1"] - pre_rerank_metrics["f1"]
-            print(f"  F1 DELTA:  {f1_delta:+.3f} ({'improvement' if f1_delta > 0 else 'regression'})")
+        print(f"  (Note: different N — see analysis cells for fair comparison)")
 
     else:
         # --- Standard (no reranking) path ---
@@ -344,7 +343,7 @@ def run_experiment(
         result["missed_ground_truth_ids"] = sorted(list(ground_truth_ids - filtered_retrieved_ids))
 
         # Print summary
-        print(f"\nMETRICS:")
+        print("\nMETRICS:")
         print(f"  Recall:    {metrics['recall']:.1%}")
         print(f"  Precision: {metrics['precision']:.1%}")
         print(f"  F1 Score:  {metrics['f1']:.3f}")
@@ -412,15 +411,21 @@ def run_all_experiments(
             strategy_names = list((config.rerank_text_strategies or {"default": None}).keys())
             has_strategies = "rerank_strategies" in successful[0]
 
+            avg_pre_n = sum(r["pre_rerank_metrics"]["total_within_threshold"] for r in successful) / len(successful)
+
             if has_strategies:
                 # Multi-strategy summary
-                header = f"{'Metric':<12} {'Pre-rerank':>12}"
+                header = f"{'Metric':<12} {'All cands':>12}"
                 divider_len = 26
                 for name in strategy_names:
-                    header += f" {name:>16} {'Delta':>8}"
+                    header += f" {'top-' + str(config.rerank_top_n) + ' ' + name:>24}"
                     divider_len += 26
                 print()
                 print(header)
+                print(f"{'':12} {'(~' + f'{avg_pre_n:.0f}' + ' avg)':>12}", end="")
+                for _ in strategy_names:
+                    print(f" {'(' + str(config.rerank_top_n) + ' results)':>24}", end="")
+                print()
                 print("-" * divider_len)
                 for metric in ["recall", "precision", "f1"]:
                     row = f"{metric:<12} {avg_pre[metric]:>12.3f}"
@@ -429,9 +434,9 @@ def run_all_experiments(
                             r["rerank_strategies"][name]["post_rerank_metrics"][metric]
                             for r in successful
                         ) / len(successful)
-                        delta = avg_val - avg_pre[metric]
-                        row += f" {avg_val:>16.3f} {delta:>+8.3f}"
+                        row += f" {avg_val:>24.3f}"
                     print(row)
+                print(f"\nNote: columns use different N — see analysis cells for fair top-N comparison")
             else:
                 # Single strategy summary (backward compat)
                 avg_post = {
@@ -439,13 +444,14 @@ def run_all_experiments(
                     for m in ["recall", "precision", "f1"]
                 }
                 print()
-                print(f"{'Metric':<12} {'Pre-rerank':>12} {'Post-rerank':>12} {'Delta':>10}")
-                print("-" * 48)
+                print(f"{'Metric':<12} {'All cands':>12} {'Top-' + str(config.rerank_top_n):>12}")
+                print(f"{'':12} {'(~' + f'{avg_pre_n:.0f}' + ' avg)':>12} {'(' + str(config.rerank_top_n) + ' results)':>12}")
+                print("-" * 38)
                 for metric in ["recall", "precision", "f1"]:
                     pre = avg_pre[metric]
                     post = avg_post[metric]
-                    delta = post - pre
-                    print(f"{metric:<12} {pre:>12.3f} {post:>12.3f} {delta:>+10.3f}")
+                    print(f"{metric:<12} {pre:>12.3f} {post:>12.3f}")
+                print(f"\nNote: columns use different N — see analysis cells for fair top-N comparison")
         else:
             print("No successful experiments")
     else:
