@@ -14,20 +14,20 @@ def lang_from_file(file_path: str) -> str:
 
 
 def file_pattern(file_path: str) -> str:
-    p = Path(file_path)
-    ext = p.suffix.lstrip(".")
+    path = Path(file_path)
+    ext = path.suffix.lstrip(".")
     glob = f"*.{ext}" if ext else "*"
-    if len(p.parts) >= 2:
-        return str(Path(*p.parts[:-1]) / glob)
-    return str(p.name)
+    if len(path.parts) >= 2:
+        return str(Path(*path.parts[:-1]) / glob)
+    return str(path.name)
 
 
-def confidence_map(c: str) -> float:
-    return {"high": 1.0, "medium": 0.7, "low": 0.4}.get((c or "").lower(), 0.5)
+def confidence_map(confidence: str) -> float:
+    return {"high": 1.0, "medium": 0.7, "low": 0.4}.get((confidence or "").lower(), 0.5)
 
 
 def stable_id(raw_comment_id: str, situation: str, lesson: str) -> str:
-    h = hashlib.sha1(
+    hash_object = hashlib.sha1(
         (raw_comment_id + "\n" + situation + "\n" + lesson).encode("utf-8")
     ).hexdigest()
-    return f"mem_{h[:12]}"
+    return f"mem_{hash_object[:12]}"
