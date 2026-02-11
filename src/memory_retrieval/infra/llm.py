@@ -28,7 +28,7 @@ def call_openrouter(
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
-    r = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=timeout_s)
-    r.raise_for_status()
-    data = r.json()
+    response = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=timeout_s)
+    response.raise_for_status()
+    data = response.json()
     return data["choices"][0]["message"]["content"].strip()
