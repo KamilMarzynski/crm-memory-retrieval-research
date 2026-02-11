@@ -79,13 +79,13 @@ def load_prompt(
 
         best_file = None
         best_ver = (-1, -1, -1)
-        for f in md_files:
-            ver_str = f.stem[1:]
+        for md_file in md_files:
+            ver_str = md_file.stem[1:]
             try:
                 ver_tuple = _parse_semver(ver_str)
                 if ver_tuple > best_ver:
                     best_ver = ver_tuple
-                    best_file = f
+                    best_file = md_file
             except ValueError:
                 continue
 
