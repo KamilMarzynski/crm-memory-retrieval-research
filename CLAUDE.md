@@ -202,9 +202,11 @@ Each run contains a `run.json` with metadata:
 
 ## Code Style & Quality Standards
 
-### Variable Naming (CRITICAL)
+### Variable Naming (CRITICAL — #1 PRIORITY)
 
-**NEVER use cryptic abbreviations or single-letter variable names.** This codebase prioritizes readability over brevity. Always use descriptive, self-documenting variable names.
+**NEVER use cryptic abbreviations or single-letter variable names.** This is the single most important code quality rule in this project. It applies to ALL code — library modules, notebooks, analysis cells, one-off scripts, everywhere. No exceptions.
+
+This codebase prioritizes readability over brevity. Always use descriptive, self-documenting variable names. Notebooks are NOT exempt — they are our primary research interface and will be read repeatedly over weeks and months. "Quick and dirty" notebook code is forbidden.
 
 **Forbidden patterns:**
 ```python
@@ -249,7 +251,18 @@ ground_truth_ids = ground_truth
 - `_` for intentionally unused values
 - Database cursors can be `cursor` (NOT `cur`)
 
-**Rationale:** Research code is read far more often than written. Code that takes 30 seconds longer to write but saves 5 minutes of comprehension time for every reader (including future you) is a massive win. Cryptic abbreviations create maintenance burden, slow development, and lead to bugs.
+**Also forbidden in notebooks (common offenders):**
+- `N` → use `top_n` (a bare capital `N` says nothing about what it counts)
+- `sr` → use `sweep_result` or `strategy_result`
+- `bi` → use `best_index`
+- `bt` → use `best_threshold`
+- `sf1s`, `sf1` → use `strategy_f1_scores`, `strategy_f1`
+- `bp`, `br`, `bf1` → use `best_precision`, `best_recall`, `best_f1` (or prefix with the context)
+- `colors_strat` → use `colors_strategy`
+- `d_f1`, `r_f1`, `d_p`, `r_p` → use `distance_f1`, `rerank_f1`, `distance_precision`, `rerank_precision`
+- `avg_d`, `avg_r` → use `avg_distance_f1`, `avg_rerank_f1`
+
+**Rationale:** Research code is read far more often than written. Code that takes 30 seconds longer to write but saves 5 minutes of comprehension time for every reader (including future you) is a massive win. Cryptic abbreviations create maintenance burden, slow development, and lead to bugs. This applies equally to notebooks — we treat them as production-quality research artifacts, not throwaway scripts.
 
 ### Code Quality Enforcement
 
