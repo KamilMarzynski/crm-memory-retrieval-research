@@ -7,15 +7,15 @@ from memory_retrieval.memories.schema import (
     FIELD_ID,
     FIELD_LESSON,
     FIELD_METADATA,
+    FIELD_RANK,
     FIELD_SOURCE,
     FIELD_VARIANTS,
-    FIELD_RANK,
 )
 from memory_retrieval.search.base import SearchResult
 from memory_retrieval.search.db_utils import (
+    deserialize_json_field,
     get_db_connection,
     serialize_json_field,
-    deserialize_json_field,
 )
 
 
@@ -154,16 +154,18 @@ class FTS5Backend:
                 variants = json.loads(row[FIELD_VARIANTS]) if row[FIELD_VARIANTS] else []
                 rank = row[FIELD_RANK]
 
-                results.append(SearchResult(
-                    id=memory_id,
-                    situation=variants[0] if variants else "",
-                    lesson=row[FIELD_LESSON],
-                    metadata=deserialize_json_field(row[FIELD_METADATA]),
-                    source=deserialize_json_field(row[FIELD_SOURCE]),
-                    score=-rank,  # BM25 rank is negative; higher = better
-                    raw_score=rank,
-                    score_type="bm25_rank",
-                ))
+                results.append(
+                    SearchResult(
+                        id=memory_id,
+                        situation=variants[0] if variants else "",
+                        lesson=row[FIELD_LESSON],
+                        metadata=deserialize_json_field(row[FIELD_METADATA]),
+                        source=deserialize_json_field(row[FIELD_SOURCE]),
+                        score=-rank,  # BM25 rank is negative; higher = better
+                        raw_score=rank,
+                        score_type="bm25_rank",
+                    )
+                )
 
                 if len(results) >= limit:
                     break

@@ -53,7 +53,7 @@ def _load_run_metadata(run_dir: Path) -> dict[str, Any]:
     metadata_path = run_dir / RUN_METADATA_FILE
     if not metadata_path.exists():
         return {}
-    with open(metadata_path, "r", encoding="utf-8") as f:
+    with open(metadata_path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -113,8 +113,7 @@ def get_run(phase: str, run_id: str) -> Path:
 
     if not run_dir.exists():
         raise FileNotFoundError(
-            f"Run '{run_id}' not found for {phase}. "
-            f"Expected directory: {run_dir}"
+            f"Run '{run_id}' not found for {phase}. Expected directory: {run_dir}"
         )
 
     return run_dir

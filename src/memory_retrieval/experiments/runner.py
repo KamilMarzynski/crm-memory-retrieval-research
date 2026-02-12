@@ -4,12 +4,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from memory_retrieval.experiments.metrics import analyze_query_performance, compute_metrics
 from memory_retrieval.infra.io import load_json, save_json
-from memory_retrieval.memories.schema import FIELD_SITUATION, FIELD_DISTANCE, FIELD_RERANK_SCORE
+from memory_retrieval.memories.schema import FIELD_DISTANCE, FIELD_RERANK_SCORE, FIELD_SITUATION
 from memory_retrieval.search.base import SearchBackend
 from memory_retrieval.search.reranker import Reranker
 from memory_retrieval.search.vector import VectorBackend, get_confidence_from_distance
-from memory_retrieval.experiments.metrics import compute_metrics, analyze_query_performance
 
 DEFAULT_SEARCH_LIMIT = 20
 DEFAULT_DISTANCE_THRESHOLD = 1.1
@@ -37,7 +37,11 @@ def _pool_and_deduplicate(
         for result in query_result.get("results", []):
             memory_id = result["id"]
             current_distance = result.get("distance", float("inf"))
-            best_distance = best_by_memory_id[memory_id].get("distance", float("inf")) if memory_id in best_by_memory_id else float("inf")
+            best_distance = (
+                best_by_memory_id[memory_id].get("distance", float("inf"))
+                if memory_id in best_by_memory_id
+                else float("inf")
+            )
             if current_distance < best_distance:
                 best_by_memory_id[memory_id] = result
 
@@ -54,10 +58,14 @@ def _pool_and_deduplicate_by_rerank_score(
         for result in query_result["reranked"]:
             memory_id = result["id"]
             rerank_score = result.get(FIELD_RERANK_SCORE, float("-inf"))
-            if memory_id not in best_by_memory_id or rerank_score > best_by_memory_id[memory_id].get(FIELD_RERANK_SCORE, float("-inf")):
+            if memory_id not in best_by_memory_id or rerank_score > best_by_memory_id[
+                memory_id
+            ].get(FIELD_RERANK_SCORE, float("-inf")):
                 best_by_memory_id[memory_id] = result
 
-    return sorted(best_by_memory_id.values(), key=lambda x: x.get(FIELD_RERANK_SCORE, 0), reverse=True)
+    return sorted(
+        best_by_memory_id.values(), key=lambda x: x.get(FIELD_RERANK_SCORE, 0), reverse=True
+    )
 
 
 def _run_rerank_strategy(
@@ -72,13 +80,18 @@ def _run_rerank_strategy(
     all_reranked_per_query = []
     for query_result in query_results:
         reranked_for_query = reranker.rerank(
-            query_result["query"], query_result["results"], top_n=None,
-            text_field=text_field, text_fn=text_fn,
+            query_result["query"],
+            query_result["results"],
+            top_n=None,
+            text_field=text_field,
+            text_fn=text_fn,
         )
-        all_reranked_per_query.append({
-            "query": query_result["query"],
-            "reranked": reranked_for_query,
-        })
+        all_reranked_per_query.append(
+            {
+                "query": query_result["query"],
+                "reranked": reranked_for_query,
+            }
+        )
 
     pooled_reranked = _pool_and_deduplicate_by_rerank_score(all_reranked_per_query)
     top_reranked = pooled_reranked[:rerank_top_n]
@@ -158,12 +171,14 @@ def run_experiment(
 
             query_result_entries.append(result_entry)
 
-        query_results.append({
-            "query": query,
-            "word_count": len(query.split()),
-            "result_count": len(results),
-            "results": query_result_entries,
-        })
+        query_results.append(
+            {
+                "query": query,
+                "word_count": len(query.split()),
+                "result_count": len(results),
+                "results": query_result_entries,
+            }
+        )
 
     # --- Build result structure ---
     result: dict[str, Any] = {
@@ -218,8 +233,12 @@ def run_experiment(
 
         for strategy_name, text_fn in strategies.items():
             strategy = _run_rerank_strategy(
-                config.reranker, query_results, ground_truth_ids,
-                config.rerank_top_n, text_fn=text_fn, text_field="situation",
+                config.reranker,
+                query_results,
+                ground_truth_ids,
+                config.rerank_top_n,
+                text_fn=text_fn,
+                text_field="situation",
             )
             strategies_results[strategy_name] = strategy
             print(f"Strategy '{strategy_name}': pooled {strategy['pooled_count']} candidates")
@@ -239,19 +258,25 @@ def run_experiment(
             }
 
         # Print summary
-        print(f"\nALL CANDIDATES within distance {config.distance_threshold} ({len(pre_rerank_threshold_ids)} results):")
+        print(
+            f"\nALL CANDIDATES within distance {config.distance_threshold} ({len(pre_rerank_threshold_ids)} results):"
+        )
         print(f"  Recall:    {pre_rerank_metrics['recall']:.1%}")
         print(f"  Precision: {pre_rerank_metrics['precision']:.1%}")
         print(f"  F1 Score:  {pre_rerank_metrics['f1']:.3f}")
 
         for strategy_name, strategy in strategies_results.items():
             post_metrics = strategy["post_rerank_metrics"]
-            label = f"RERANKED TOP-{config.rerank_top_n} [{strategy_name}]" if len(strategies) > 1 else f"RERANKED TOP-{config.rerank_top_n}"
+            label = (
+                f"RERANKED TOP-{config.rerank_top_n} [{strategy_name}]"
+                if len(strategies) > 1
+                else f"RERANKED TOP-{config.rerank_top_n}"
+            )
             print(f"\n{label} ({post_metrics['reranked_count']} results):")
             print(f"  Recall:    {post_metrics['recall']:.1%}")
             print(f"  Precision: {post_metrics['precision']:.1%}")
             print(f"  F1 Score:  {post_metrics['f1']:.3f}")
-        print(f"  (Note: different N — see analysis cells for fair comparison)")
+        print("  (Note: different N — see analysis cells for fair comparison)")
 
     else:
         # --- Standard (no reranking) path ---
@@ -278,7 +303,9 @@ def run_experiment(
             **metrics,
         }
         result["query_analysis"] = query_analysis
-        result["retrieved_ground_truth_ids"] = sorted(list(filtered_retrieved_ids & ground_truth_ids))
+        result["retrieved_ground_truth_ids"] = sorted(
+            list(filtered_retrieved_ids & ground_truth_ids)
+        )
         result["missed_ground_truth_ids"] = sorted(list(ground_truth_ids - filtered_retrieved_ids))
 
         # Print summary
@@ -342,16 +369,19 @@ def run_all_experiments(
     print("OVERALL SUMMARY")
     print("=" * 60)
 
-    if config.reranker is not None:
-        success_key = "post_rerank_metrics"
-    else:
-        success_key = "metrics"
-    successful = [experiment_result for experiment_result in all_results if success_key in experiment_result]
+    success_key = "post_rerank_metrics" if config.reranker is not None else "metrics"
+    successful = [
+        experiment_result for experiment_result in all_results if success_key in experiment_result
+    ]
 
     if config.reranker is not None:
         if successful:
             avg_pre = {
-                metric: sum(experiment_result["pre_rerank_metrics"][metric] for experiment_result in successful) / len(successful)
+                metric: sum(
+                    experiment_result["pre_rerank_metrics"][metric]
+                    for experiment_result in successful
+                )
+                / len(successful)
                 for metric in ["recall", "precision", "f1"]
             }
 
@@ -361,7 +391,10 @@ def run_all_experiments(
             strategy_names = list((config.rerank_text_strategies or {"default": None}).keys())
             has_strategies = "rerank_strategies" in successful[0]
 
-            avg_pre_n = sum(experiment_result["pre_rerank_metrics"]["total_within_threshold"] for experiment_result in successful) / len(successful)
+            avg_pre_n = sum(
+                experiment_result["pre_rerank_metrics"]["total_within_threshold"]
+                for experiment_result in successful
+            ) / len(successful)
 
             if has_strategies:
                 # Multi-strategy summary
@@ -381,41 +414,64 @@ def run_all_experiments(
                     row = f"{metric:<12} {avg_pre[metric]:>12.3f}"
                     for name in strategy_names:
                         avg_val = sum(
-                            experiment_result["rerank_strategies"][name]["post_rerank_metrics"][metric]
+                            experiment_result["rerank_strategies"][name]["post_rerank_metrics"][
+                                metric
+                            ]
                             for experiment_result in successful
                         ) / len(successful)
                         row += f" {avg_val:>24.3f}"
                     print(row)
-                print(f"\nNote: columns use different N — see analysis cells for fair top-N comparison")
+                print(
+                    "\nNote: columns use different N — see analysis cells for fair top-N comparison"
+                )
             else:
                 # Single strategy summary (backward compat)
                 avg_post = {
-                    metric: sum(experiment_result["post_rerank_metrics"][metric] for experiment_result in successful) / len(successful)
+                    metric: sum(
+                        experiment_result["post_rerank_metrics"][metric]
+                        for experiment_result in successful
+                    )
+                    / len(successful)
                     for metric in ["recall", "precision", "f1"]
                 }
                 print()
                 print(f"{'Metric':<12} {'All cands':>12} {'Top-' + str(config.rerank_top_n):>12}")
-                print(f"{'':12} {'(~' + f'{avg_pre_n:.0f}' + ' avg)':>12} {'(' + str(config.rerank_top_n) + ' results)':>12}")
+                print(
+                    f"{'':12} {'(~' + f'{avg_pre_n:.0f}' + ' avg)':>12} {'(' + str(config.rerank_top_n) + ' results)':>12}"
+                )
                 print("-" * 38)
                 for metric in ["recall", "precision", "f1"]:
                     pre = avg_pre[metric]
                     post = avg_post[metric]
                     print(f"{metric:<12} {pre:>12.3f} {post:>12.3f}")
-                print(f"\nNote: columns use different N — see analysis cells for fair top-N comparison")
+                print(
+                    "\nNote: columns use different N — see analysis cells for fair top-N comparison"
+                )
         else:
             print("No successful experiments")
     else:
         if successful:
-            avg_recall = sum(experiment_result["metrics"]["recall"] for experiment_result in successful) / len(successful)
-            avg_precision = sum(experiment_result["metrics"]["precision"] for experiment_result in successful) / len(successful)
-            avg_f1 = sum(experiment_result["metrics"]["f1"] for experiment_result in successful) / len(successful)
-            total_gt = sum(experiment_result["ground_truth"]["count"] for experiment_result in successful)
-            total_retrieved = sum(experiment_result["metrics"]["ground_truth_retrieved"] for experiment_result in successful)
+            avg_recall = sum(
+                experiment_result["metrics"]["recall"] for experiment_result in successful
+            ) / len(successful)
+            avg_precision = sum(
+                experiment_result["metrics"]["precision"] for experiment_result in successful
+            ) / len(successful)
+            avg_f1 = sum(
+                experiment_result["metrics"]["f1"] for experiment_result in successful
+            ) / len(successful)
+            total_gt = sum(
+                experiment_result["ground_truth"]["count"] for experiment_result in successful
+            )
+            total_retrieved = sum(
+                experiment_result["metrics"]["ground_truth_retrieved"]
+                for experiment_result in successful
+            )
 
             print(f"Experiments run: {len(successful)}")
             print(f"Total ground truth memories: {total_gt}")
             print(f"Total retrieved: {total_retrieved}")
-            print(f"\nAGGREGATE METRICS:")
+            print("\nAGGREGATE METRICS:")
             print(f"  Average recall:    {avg_recall:.1%}")
             print(f"  Average precision: {avg_precision:.1%}")
             print(f"  Average F1:        {avg_f1:.3f}")

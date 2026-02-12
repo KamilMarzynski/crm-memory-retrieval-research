@@ -9,9 +9,9 @@ class SearchResult:
     lesson: str
     metadata: dict[str, Any]
     source: dict[str, Any]
-    score: float          # Higher = better (normalized)
-    raw_score: float      # Original (BM25 rank or cosine distance)
-    score_type: str       # "bm25_rank" | "cosine_distance" | "rerank_score"
+    score: float  # Higher = better (normalized)
+    raw_score: float  # Original (BM25 rank or cosine distance)
+    score_type: str  # "bm25_rank" | "cosine_distance" | "rerank_score"
 
 
 class SearchBackend(Protocol):

@@ -1,4 +1,4 @@
-from typing import Callable
+from collections.abc import Callable
 
 
 def validate_situation_v1(text: str) -> tuple[bool, str]:

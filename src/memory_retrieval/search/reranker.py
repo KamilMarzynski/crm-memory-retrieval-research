@@ -2,7 +2,7 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from memory_retrieval.memories.schema import FIELD_SITUATION, FIELD_RERANK_SCORE
+from memory_retrieval.memories.schema import FIELD_RERANK_SCORE, FIELD_SITUATION
 
 if TYPE_CHECKING:
     from sentence_transformers import CrossEncoder
@@ -47,11 +47,13 @@ class Reranker:
         if not candidates:
             return []
 
-        documents = [text_fn(c) for c in candidates] if text_fn else [c[text_field] for c in candidates]
+        documents = (
+            [text_fn(c) for c in candidates] if text_fn else [c[text_field] for c in candidates]
+        )
         scores = self.score_pairs(query, documents)
 
         scored = []
-        for candidate, score in zip(candidates, scores):
+        for candidate, score in zip(candidates, scores, strict=True):
             enriched = dict(candidate)
             enriched[FIELD_RERANK_SCORE] = score
             scored.append(enriched)

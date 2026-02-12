@@ -15,6 +15,8 @@ def load_memories(memories_dir: str | Path) -> list[dict[str, Any]]:
                     try:
                         memories.append(json.loads(line))
                     except json.JSONDecodeError as e:
-                        print(f"Warning: Skipping malformed JSON in {jsonl_file.name}:{line_num}: {e}")
+                        print(
+                            f"Warning: Skipping malformed JSON in {jsonl_file.name}:{line_num}: {e}"
+                        )
 
     return memories

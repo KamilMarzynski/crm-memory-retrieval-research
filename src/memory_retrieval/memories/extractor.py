@@ -7,25 +7,25 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from memory_retrieval.infra.io import load_json, ensure_dir
+from memory_retrieval.infra.io import ensure_dir, load_json
 from memory_retrieval.infra.llm import call_openrouter
 from memory_retrieval.infra.prompts import load_prompt
 from memory_retrieval.memories.helpers import (
-    short_repo_name,
-    lang_from_file,
-    file_pattern,
     confidence_map,
+    file_pattern,
+    lang_from_file,
+    short_repo_name,
     stable_id,
 )
 from memory_retrieval.memories.validators import (
-    validate_lesson,
     get_situation_validator,
+    validate_lesson,
 )
 
 
 class SituationFormat(Enum):
-    VARIANTS = "variants"   # 3 semicolon-separated (for FTS5)
-    SINGLE = "single"       # Single description (for vector)
+    VARIANTS = "variants"  # 3 semicolon-separated (for FTS5)
+    SINGLE = "single"  # Single description (for vector)
 
 
 class ExtractionConfig:
@@ -175,9 +175,7 @@ def extract_memories(
                 situation = variants[0]
 
             else:
-                additional_context = (
-                    f"ADDITIONAL CONTEXT: {user_note}" if user_note else ""
-                )
+                additional_context = f"ADDITIONAL CONTEXT: {user_note}" if user_note else ""
 
                 situation = call_openrouter(
                     api_key=api_key,
@@ -281,9 +279,7 @@ def extract_memories(
                     "verifiedBy": c.get("verifiedBy", None),
                     "pr_context": pr_context,
                     "gathered_at": gathered_at,
-                    "raw_context_hash": hashlib.sha1(
-                        context.encode("utf-8")
-                    ).hexdigest()[:12],
+                    "raw_context_hash": hashlib.sha1(context.encode("utf-8")).hexdigest()[:12],
                 },
             }
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from memory_retrieval.infra.io import load_json, save_json
-from memory_retrieval.infra.llm import call_openrouter, OPENROUTER_API_KEY_ENV
+from memory_retrieval.infra.llm import OPENROUTER_API_KEY_ENV, call_openrouter
 from memory_retrieval.infra.prompts import load_prompt
 from memory_retrieval.memories.schema import FIELD_SITUATION
 from memory_retrieval.search.base import SearchBackend
@@ -36,7 +36,7 @@ def parse_queries_robust(response: str) -> list[str]:
     """Robustly parse query list from LLM response with multiple fallback strategies."""
     # Try direct JSON parse first
     try:
-        match = re.search(r'\[[\s\S]*\]', response)
+        match = re.search(r"\[[\s\S]*\]", response)
         if match:
             queries = json.loads(match.group())
             if isinstance(queries, list) and all(isinstance(q, str) for q in queries):
@@ -51,10 +51,10 @@ def parse_queries_robust(response: str) -> list[str]:
 
     # Last resort: split by newlines and clean
     lines = []
-    for line in response.split('\n'):
+    for line in response.split("\n"):
         line = line.strip()
-        line = re.sub(r'^[\d\.\-\*]+\s*', '', line)
-        line = line.strip('"\'')
+        line = re.sub(r"^[\d\.\-\*]+\s*", "", line)
+        line = line.strip("\"'")
         if 20 <= len(line) <= 200:
             lines.append(line)
 
@@ -123,13 +123,19 @@ def generate_queries_for_test_case(
     # Get sample memories for v2+ prompts
     sample_memories: list[dict[str, Any]] = []
     memory_examples = ""
-    if config.use_sample_memories and query_prompt.version >= "2.0.0" and search_backend and db_path:
+    if (
+        config.use_sample_memories
+        and query_prompt.version >= "2.0.0"
+        and search_backend
+        and db_path
+    ):
         sample_memories = _get_random_sample_memories(search_backend, db_path, num_samples=5)
-        memory_examples = "\n".join([
-            f'- "{memory[FIELD_SITUATION]}"'
-            for memory in sample_memories[:5]
-        ])
-        print(f"Using prompt {query_prompt.version_tag} with {len(sample_memories)} sample memories")
+        memory_examples = "\n".join(
+            [f'- "{memory[FIELD_SITUATION]}"' for memory in sample_memories[:5]]
+        )
+        print(
+            f"Using prompt {query_prompt.version_tag} with {len(sample_memories)} sample memories"
+        )
     else:
         print(f"Using prompt {query_prompt.version_tag}")
 
@@ -163,9 +169,7 @@ def generate_queries_for_test_case(
     }
 
     if sample_memories:
-        query_data["sample_memories_used"] = [
-            memory[FIELD_SITUATION] for memory in sample_memories
-        ]
+        query_data["sample_memories_used"] = [memory[FIELD_SITUATION] for memory in sample_memories]
 
     # Save to queries_dir
     Path(queries_dir).mkdir(parents=True, exist_ok=True)

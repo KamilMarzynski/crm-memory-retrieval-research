@@ -53,16 +53,20 @@ def analyze_query_performance(query_results: list[dict[str, Any]]) -> dict[str, 
     for query_result in query_results:
         hits = sum(1 for result in query_result.get("results", []) if result.get("is_ground_truth"))
         total = len(query_result.get("results", []))
-        distances = [result["distance"] for result in query_result.get("results", []) if "distance" in result]
+        distances = [
+            result["distance"] for result in query_result.get("results", []) if "distance" in result
+        ]
 
-        query_stats.append({
-            "query": query_result["query"],
-            "word_count": len(query_result["query"].split()),
-            "hits": hits,
-            "precision": hits / total if total > 0 else 0,
-            "avg_distance": statistics.mean(distances) if distances else None,
-            "min_distance": min(distances) if distances else None,
-        })
+        query_stats.append(
+            {
+                "query": query_result["query"],
+                "word_count": len(query_result["query"].split()),
+                "hits": hits,
+                "precision": hits / total if total > 0 else 0,
+                "avg_distance": statistics.mean(distances) if distances else None,
+                "min_distance": min(distances) if distances else None,
+            }
+        )
 
     queries_with_hits = sum(1 for query_stat in query_stats if query_stat["hits"] > 0)
     total_queries = len(query_stats)
@@ -73,5 +77,7 @@ def analyze_query_performance(query_results: list[dict[str, Any]]) -> dict[str, 
         "query_hit_rate": queries_with_hits / total_queries if total_queries > 0 else 0,
         "best_queries": sorted(query_stats, key=lambda x: -x["hits"])[:3],
         "worst_queries": sorted(query_stats, key=lambda x: x["hits"])[:3],
-        "avg_word_count": statistics.mean([query_stat["word_count"] for query_stat in query_stats]) if query_stats else 0,
+        "avg_word_count": statistics.mean([query_stat["word_count"] for query_stat in query_stats])
+        if query_stats
+        else 0,
     }

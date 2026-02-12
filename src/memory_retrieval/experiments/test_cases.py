@@ -72,9 +72,7 @@ def filter_diff(full_diff: str) -> str:
     return "\n".join(filtered_lines)
 
 
-def get_ground_truth_memory_ids(
-    raw_path: str, all_memories: list[dict[str, Any]]
-) -> set[str]:
+def get_ground_truth_memory_ids(raw_path: str, all_memories: list[dict[str, Any]]) -> set[str]:
     """Determine which memories are ground truth for a given PR.
 
     Matches memories to the PR by checking if their source_comment_id appears
@@ -175,20 +173,22 @@ def build_test_cases(
     skipped = 0
 
     for i, raw_file in enumerate(raw_files):
-        print(f"[{i+1}/{len(raw_files)}] Processing {raw_file.name}...")
+        print(f"[{i + 1}/{len(raw_files)}] Processing {raw_file.name}...")
 
         try:
             test_case = build_test_case(str(raw_file), all_memories)
 
             if test_case is None:
-                print(f"  Skipped (no ground truth memories)")
+                print("  Skipped (no ground truth memories)")
                 skipped += 1
                 continue
 
             tc_path = output_path / f"{raw_file.stem}.json"
             save_json(test_case, tc_path)
 
-            print(f"  Created test case with {test_case[FIELD_GROUND_TRUTH_COUNT]} ground truth memories")
+            print(
+                f"  Created test case with {test_case[FIELD_GROUND_TRUTH_COUNT]} ground truth memories"
+            )
             created += 1
 
         except Exception as e:

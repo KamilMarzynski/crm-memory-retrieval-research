@@ -1,23 +1,23 @@
 import sqlite3
 import struct
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, Iterator
+from typing import Any
 
 import ollama
 import sqlite_vec
 
 from memory_retrieval.memories.loader import load_memories
 from memory_retrieval.memories.schema import (
+    FIELD_DISTANCE,
     FIELD_ID,
-    FIELD_SITUATION,
     FIELD_LESSON,
     FIELD_METADATA,
+    FIELD_SITUATION,
     FIELD_SOURCE,
-    FIELD_DISTANCE,
 )
 from memory_retrieval.search.base import SearchResult
-from memory_retrieval.search.db_utils import serialize_json_field, deserialize_json_field
-
+from memory_retrieval.search.db_utils import deserialize_json_field, serialize_json_field
 
 # Ollama configuration
 OLLAMA_HOST: str | None = None
@@ -184,16 +184,18 @@ class VectorBackend:
             results: list[SearchResult] = []
             for row in cursor.fetchall():
                 distance = row[FIELD_DISTANCE]
-                results.append(SearchResult(
-                    id=row[FIELD_ID],
-                    situation=row[FIELD_SITUATION],
-                    lesson=row[FIELD_LESSON],
-                    metadata=deserialize_json_field(row[FIELD_METADATA]),
-                    source=deserialize_json_field(row[FIELD_SOURCE]),
-                    score=1.0 - distance,  # Invert so higher = better
-                    raw_score=distance,
-                    score_type="cosine_distance",
-                ))
+                results.append(
+                    SearchResult(
+                        id=row[FIELD_ID],
+                        situation=row[FIELD_SITUATION],
+                        lesson=row[FIELD_LESSON],
+                        metadata=deserialize_json_field(row[FIELD_METADATA]),
+                        source=deserialize_json_field(row[FIELD_SOURCE]),
+                        score=1.0 - distance,  # Invert so higher = better
+                        raw_score=distance,
+                        score_type="cosine_distance",
+                    )
+                )
 
             return results
 
@@ -293,9 +295,7 @@ class VectorBackend:
                 for row in cursor.fetchall()
             ]
 
-    def get_random_sample_memories(
-        self, db_path: str, n: int = 5
-    ) -> list[dict[str, Any]]:
+    def get_random_sample_memories(self, db_path: str, n: int = 5) -> list[dict[str, Any]]:
         """Get N random memories from the database for use in prompt examples.
 
         Args:
