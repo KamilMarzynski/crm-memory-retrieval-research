@@ -113,7 +113,6 @@ generate_all_queries(
 config = ExperimentConfig(
     search_backend=vector_backend,
     reranker=Reranker(),          # None for standard (no reranking) path
-    rerank_top_n=4,
 )
 results = run_all_experiments(
     test_cases_dir=str(run_dir / "test_cases"),
@@ -184,9 +183,8 @@ Each run contains a `run.json` with metadata:
    - Can run independently (phase2.ipynb) or on Phase 1 data (phase1_reranking_comparison.ipynb)
    - Loads pre-generated queries, runs vector search
    - **Per-query reranking**: each query's results are reranked independently against that query using the cross-encoder (bge-reranker-v2-m3), then pooled and deduplicated by best rerank score
-   - Takes top-N after pooling (default: 4)
-   - Computes metrics before and after reranking for comparison
-   - Stores all pooled reranked candidates in `reranked_results` (sorted by rerank score descending) for downstream sweep analysis
+   - Stores ALL pooled reranked candidates in `reranked_results` (sorted by rerank score descending) — no top-N filtering in the runner
+   - Computes pre-rerank metrics as baseline; notebooks handle top-N and threshold analysis downstream
 
 ### Memory Schema
 
@@ -318,7 +316,7 @@ All metrics are **macro-averaged** (computed per test case, then averaged across
 | Number of queries | Prompt-driven | More queries = broader recall, more noise |
 | Search limit per query | `ExperimentConfig.search_limit` | How many candidates per query (default: 20) |
 | Distance threshold | `ExperimentConfig.distance_threshold` | Pre-rerank filter for vector distance |
-| Rerank top-N | `ExperimentConfig.rerank_top_n` | How many results to keep after reranking |
+| Rerank top-N | Notebook `ANALYSIS_TOP_N` | How many results to compare in analysis (not in runner) |
 | Reranker model | `Reranker(model_name=...)` | Cross-encoder model for reranking |
 | Embedding model | Ollama model in `VectorBackend` | Currently `mxbai-embed-large` |
 

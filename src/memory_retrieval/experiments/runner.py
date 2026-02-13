@@ -23,7 +23,6 @@ class ExperimentConfig:
     search_limit: int = DEFAULT_SEARCH_LIMIT
     distance_threshold: float = DEFAULT_DISTANCE_THRESHOLD
     reranker: Reranker | None = None
-    rerank_top_n: int = 4
     rerank_text_strategies: dict[str, Callable[[dict[str, Any]], str]] | None = None
 
 
@@ -72,11 +71,14 @@ def _run_rerank_strategy(
     reranker: Reranker,
     query_results: list[dict[str, Any]],
     ground_truth_ids: set[str],
-    rerank_top_n: int,
     text_fn: Callable[[dict[str, Any]], str] | None = None,
     text_field: str = "situation",
 ) -> dict[str, Any]:
-    """Run reranking for a single text strategy and return metrics + results."""
+    """Run reranking for a single text strategy and return all pooled results.
+
+    All candidates are reranked and stored — no top-N filtering is applied here.
+    Notebooks handle top-N and threshold analysis downstream.
+    """
     all_reranked_per_query = []
     for query_result in query_results:
         reranked_for_query = reranker.rerank(
@@ -94,17 +96,9 @@ def _run_rerank_strategy(
         )
 
     pooled_reranked = _pool_and_deduplicate_by_rerank_score(all_reranked_per_query)
-    top_reranked = pooled_reranked[:rerank_top_n]
-    reranked_ids = {result["id"] for result in top_reranked}
-    post_metrics = compute_metrics(reranked_ids, ground_truth_ids)
 
     return {
         "pooled_count": len(pooled_reranked),
-        "post_rerank_metrics": {
-            **post_metrics,
-            "reranked_count": len(top_reranked),
-            "ground_truth_retrieved": len(reranked_ids & ground_truth_ids),
-        },
         "reranked_results": [
             {
                 "id": result["id"],
@@ -116,8 +110,6 @@ def _run_rerank_strategy(
             }
             for result in pooled_reranked
         ],
-        "retrieved_ground_truth_ids": sorted(list(reranked_ids & ground_truth_ids)),
-        "missed_ground_truth_ids": sorted(list(ground_truth_ids - reranked_ids)),
         "per_query_reranked": [
             {
                 "query": per_query["query"],
@@ -219,10 +211,9 @@ def run_experiment(
     if config.reranker is not None:
         # --- Reranking path ---
         result["distance_threshold"] = config.distance_threshold
-        result["rerank_top_n"] = config.rerank_top_n
         result["reranker_model"] = config.reranker.model_name
 
-        # Pre-rerank metrics
+        # Pre-rerank metrics (all candidates within distance threshold)
         pre_rerank_threshold_ids: set[str] = {
             entry["id"]
             for query_result in query_results
@@ -249,19 +240,15 @@ def run_experiment(
                 config.reranker,
                 query_results,
                 ground_truth_ids,
-                config.rerank_top_n,
                 text_fn=text_fn,
                 text_field="situation",
             )
             strategies_results[strategy_name] = strategy
 
-        # Primary strategy (first one) populates top-level keys for backward compat
+        # Primary strategy (first one) populates top-level keys
         primary_name = next(iter(strategies))
         primary = strategies_results[primary_name]
-        result["post_rerank_metrics"] = primary["post_rerank_metrics"]
         result["reranked_results"] = primary["reranked_results"]
-        result["retrieved_ground_truth_ids"] = primary["retrieved_ground_truth_ids"]
-        result["missed_ground_truth_ids"] = primary["missed_ground_truth_ids"]
         result["per_query_reranked"] = primary["per_query_reranked"]
 
         if len(strategies) > 1:
@@ -352,78 +339,33 @@ def run_all_experiments(
     print("OVERALL SUMMARY")
     print("=" * 60)
 
-    success_key = "post_rerank_metrics" if config.reranker is not None else "metrics"
+    success_key = "pre_rerank_metrics" if config.reranker is not None else "metrics"
     successful = [
         experiment_result for experiment_result in all_results if success_key in experiment_result
     ]
 
     if config.reranker is not None:
         if successful:
-            avg_pre = {
-                metric: sum(
-                    experiment_result["pre_rerank_metrics"][metric]
-                    for experiment_result in successful
-                )
-                / len(successful)
-                for metric in ["recall", "precision", "f1"]
-            }
-
             print(f"Experiments run: {len(successful)}")
-            print(f"Rerank top-n: {config.rerank_top_n}")
-
-            strategy_names = list((config.rerank_text_strategies or {"default": None}).keys())
-            has_strategies = "rerank_strategies" in successful[0]
 
             avg_pre_n = sum(
                 experiment_result["pre_rerank_metrics"]["total_within_threshold"]
                 for experiment_result in successful
             ) / len(successful)
 
-            if has_strategies:
-                # Multi-strategy summary
-                header = f"{'Metric':<12} {'All cands':>12}"
-                divider_len = 26
-                for name in strategy_names:
-                    header += f" {'top-' + str(config.rerank_top_n) + ' ' + name:>24}"
-                    divider_len += 26
-                print()
-                print(header)
-                print(f"{'':12} {'(~' + f'{avg_pre_n:.0f}' + ' avg)':>12}", end="")
-                for _ in strategy_names:
-                    print(f" {'(' + str(config.rerank_top_n) + ' results)':>24}", end="")
-                print()
-                print("-" * divider_len)
-                for metric in ["recall", "precision", "f1"]:
-                    row = f"{metric:<12} {avg_pre[metric]:>12.3f}"
-                    for name in strategy_names:
-                        avg_val = sum(
-                            experiment_result["rerank_strategies"][name]["post_rerank_metrics"][
-                                metric
-                            ]
-                            for experiment_result in successful
-                        ) / len(successful)
-                        row += f" {avg_val:>24.3f}"
-                    print(row)
-            else:
-                # Single strategy summary (backward compat)
-                avg_post = {
-                    metric: sum(
-                        experiment_result["post_rerank_metrics"][metric]
-                        for experiment_result in successful
-                    )
-                    / len(successful)
-                    for metric in ["recall", "precision", "f1"]
-                }
-                print()
-                print(f"{'Metric':<12} {'All cands':>12} {'Top-' + str(config.rerank_top_n):>12}")
-                print(
-                    f"{'':12} {'(~' + f'{avg_pre_n:.0f}' + ' avg)':>12} {'(' + str(config.rerank_top_n) + ' results)':>12}"
-                )
-                print("-" * 38)
-                for metric in ["recall", "precision", "f1"]:
-                    pre = avg_pre[metric]
-                    post = avg_post[metric]
-                    print(f"{metric:<12} {pre:>12.3f} {post:>12.3f}")
+            print(
+                f"\nPre-rerank metrics (all candidates within distance threshold, ~{avg_pre_n:.0f} avg):"
+            )
+            for metric in ["recall", "precision", "f1"]:
+                avg_value = sum(
+                    experiment_result["pre_rerank_metrics"][metric]
+                    for experiment_result in successful
+                ) / len(successful)
+                print(f"  {metric:<12} {avg_value:.3f}")
+
+            print(
+                "\nReranked results stored — use notebook analysis cells for top-N and threshold sweeps."
+            )
         else:
             print("No successful experiments")
     else:
