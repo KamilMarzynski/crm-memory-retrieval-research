@@ -118,6 +118,21 @@ def _run_rerank_strategy(
         ],
         "retrieved_ground_truth_ids": sorted(list(reranked_ids & ground_truth_ids)),
         "missed_ground_truth_ids": sorted(list(ground_truth_ids - reranked_ids)),
+        "per_query_reranked": [
+            {
+                "query": per_query["query"],
+                "reranked": [
+                    {
+                        "id": result["id"],
+                        "rerank_score": result[FIELD_RERANK_SCORE],
+                        "distance": result.get(FIELD_DISTANCE, result.get("distance", 0)),
+                        "is_ground_truth": result["id"] in ground_truth_ids,
+                    }
+                    for result in per_query["reranked"]
+                ],
+            }
+            for per_query in all_reranked_per_query
+        ],
     }
 
 
@@ -247,6 +262,7 @@ def run_experiment(
         result["reranked_results"] = primary["reranked_results"]
         result["retrieved_ground_truth_ids"] = primary["retrieved_ground_truth_ids"]
         result["missed_ground_truth_ids"] = primary["missed_ground_truth_ids"]
+        result["per_query_reranked"] = primary["per_query_reranked"]
 
         if len(strategies) > 1:
             result["rerank_strategies"] = {
