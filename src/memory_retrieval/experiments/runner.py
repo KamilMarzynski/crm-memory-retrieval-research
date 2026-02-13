@@ -141,9 +141,7 @@ def run_experiment(
 
     queries = query_data.get("queries", [])
 
-    print(f"Test case: {test_case.get('test_case_id', 'unknown')}")
-    print(f"Ground truth memories: {len(ground_truth_ids)}")
-    print(f"Using {len(queries)} pre-generated queries")
+    test_case_id = test_case.get("test_case_id", "unknown")
 
     # Execute search for each query
     all_retrieved_ids: set[str] = set()
@@ -183,7 +181,7 @@ def run_experiment(
     # --- Build result structure ---
     result: dict[str, Any] = {
         "experiment_id": f"exp_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-        "test_case_id": test_case.get("test_case_id", "unknown"),
+        "test_case_id": test_case_id,
         "source_file": test_case.get("source_file", "unknown"),
         "pr_context": f"{meta.get('sourceBranch', '?')} -> {meta.get('targetBranch', '?')}",
         "query_generation": {
@@ -241,7 +239,6 @@ def run_experiment(
                 text_field="situation",
             )
             strategies_results[strategy_name] = strategy
-            print(f"Strategy '{strategy_name}': pooled {strategy['pooled_count']} candidates")
 
         # Primary strategy (first one) populates top-level keys for backward compat
         primary_name = next(iter(strategies))
@@ -256,27 +253,6 @@ def run_experiment(
                 name: {k: v for k, v in strategy.items() if k != "pooled_count"}
                 for name, strategy in strategies_results.items()
             }
-
-        # Print summary
-        print(
-            f"\nALL CANDIDATES within distance {config.distance_threshold} ({len(pre_rerank_threshold_ids)} results):"
-        )
-        print(f"  Recall:    {pre_rerank_metrics['recall']:.1%}")
-        print(f"  Precision: {pre_rerank_metrics['precision']:.1%}")
-        print(f"  F1 Score:  {pre_rerank_metrics['f1']:.3f}")
-
-        for strategy_name, strategy in strategies_results.items():
-            post_metrics = strategy["post_rerank_metrics"]
-            label = (
-                f"RERANKED TOP-{config.rerank_top_n} [{strategy_name}]"
-                if len(strategies) > 1
-                else f"RERANKED TOP-{config.rerank_top_n}"
-            )
-            print(f"\n{label} ({post_metrics['reranked_count']} results):")
-            print(f"  Recall:    {post_metrics['recall']:.1%}")
-            print(f"  Precision: {post_metrics['precision']:.1%}")
-            print(f"  F1 Score:  {post_metrics['f1']:.3f}")
-        print("  (Note: different N — see analysis cells for fair comparison)")
 
     else:
         # --- Standard (no reranking) path ---
@@ -308,20 +284,10 @@ def run_experiment(
         )
         result["missed_ground_truth_ids"] = sorted(list(ground_truth_ids - filtered_retrieved_ids))
 
-        # Print summary
-        print("\nMETRICS:")
-        print(f"  Recall:    {metrics['recall']:.1%}")
-        print(f"  Precision: {metrics['precision']:.1%}")
-        print(f"  F1 Score:  {metrics['f1']:.3f}")
-
     # Save results
     Path(results_dir).mkdir(parents=True, exist_ok=True)
-    results_path = (
-        Path(results_dir)
-        / f"results_{test_case.get('test_case_id', 'unknown')}_{result['experiment_id']}.json"
-    )
+    results_path = Path(results_dir) / f"results_{test_case_id}_{result['experiment_id']}.json"
     save_json(result, results_path)
-    print(f"\nResults saved to: {results_path}")
 
     return result
 
@@ -343,11 +309,11 @@ def run_all_experiments(
     all_results: list[dict[str, Any]] = []
 
     for i, test_case_file in enumerate(test_case_files):
-        print(f"\n[{i + 1}/{len(test_case_files)}] Processing {test_case_file.name}")
-
         query_file = queries_path / test_case_file.name
         if not query_file.exists():
-            print(f"No query file found for {test_case_file.name}, skipping")
+            print(
+                f"[{i + 1}/{len(test_case_files)}] {test_case_file.stem} — skipped (no query file)"
+            )
             all_results.append({"test_case_file": test_case_file.name, "error": "no query file"})
             continue
 
@@ -360,8 +326,9 @@ def run_all_experiments(
                 config=config,
             )
             all_results.append(experiment_result)
+            print(f"[{i + 1}/{len(test_case_files)}] {test_case_file.stem} — done")
         except Exception as error:
-            print(f"Error processing {test_case_file.name}: {error}")
+            print(f"[{i + 1}/{len(test_case_files)}] {test_case_file.stem} — ERROR: {error}")
             all_results.append({"test_case_file": test_case_file.name, "error": str(error)})
 
     # Print summary
@@ -421,9 +388,6 @@ def run_all_experiments(
                         ) / len(successful)
                         row += f" {avg_val:>24.3f}"
                     print(row)
-                print(
-                    "\nNote: columns use different N — see analysis cells for fair top-N comparison"
-                )
             else:
                 # Single strategy summary (backward compat)
                 avg_post = {
@@ -444,9 +408,6 @@ def run_all_experiments(
                     pre = avg_pre[metric]
                     post = avg_post[metric]
                     print(f"{metric:<12} {pre:>12.3f} {post:>12.3f}")
-                print(
-                    "\nNote: columns use different N — see analysis cells for fair top-N comparison"
-                )
         else:
             print("No successful experiments")
     else:

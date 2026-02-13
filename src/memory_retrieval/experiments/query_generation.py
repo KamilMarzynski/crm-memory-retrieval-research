@@ -105,8 +105,6 @@ def generate_queries_for_test_case(
     context = test_case.get("pr_context", "")
     filtered_diff = test_case.get("filtered_diff", "")
 
-    print(f"Test case: {test_case_id}")
-
     # Load prompt template
     query_prompt = load_prompt(
         "memory-query",
@@ -133,11 +131,6 @@ def generate_queries_for_test_case(
         memory_examples = "\n".join(
             [f'- "{memory[FIELD_SITUATION]}"' for memory in sample_memories[:5]]
         )
-        print(
-            f"Using prompt {query_prompt.version_tag} with {len(sample_memories)} sample memories"
-        )
-    else:
-        print(f"Using prompt {query_prompt.version_tag}")
 
     messages = query_prompt.render(
         context=context,
@@ -146,7 +139,6 @@ def generate_queries_for_test_case(
     )
 
     # Generate queries via LLM
-    print(f"Generating queries via {config.model}...")
     raw_response = call_openrouter(
         api_key,
         config.model,
@@ -155,7 +147,6 @@ def generate_queries_for_test_case(
         max_tokens=DEFAULT_MAX_TOKENS,
     )
     queries = parse_queries_robust(raw_response)
-    print(f"Generated {len(queries)} queries")
 
     # Build query data
     query_data: dict[str, Any] = {
@@ -176,7 +167,6 @@ def generate_queries_for_test_case(
     stem = Path(test_case_path).stem
     query_file_path = Path(queries_dir) / f"{stem}.json"
     save_json(query_data, query_file_path)
-    print(f"Queries saved to: {query_file_path}")
 
     return query_data
 
@@ -196,8 +186,6 @@ def generate_all_queries(
     all_query_data: list[dict[str, Any]] = []
 
     for i, test_case_file in enumerate(test_case_files):
-        print(f"\n[{i + 1}/{len(test_case_files)}] Generating queries for {test_case_file.name}")
-
         try:
             query_data = generate_queries_for_test_case(
                 str(test_case_file),
@@ -207,8 +195,10 @@ def generate_all_queries(
                 search_backend=search_backend,
             )
             all_query_data.append(query_data)
+            num_queries = len(query_data.get("queries", []))
+            print(f"[{i + 1}/{len(test_case_files)}] {test_case_file.stem} — {num_queries} queries")
         except Exception as error:
-            print(f"Error generating queries for {test_case_file.name}: {error}")
+            print(f"[{i + 1}/{len(test_case_files)}] {test_case_file.stem} — ERROR: {error}")
             all_query_data.append({"test_case_file": test_case_file.name, "error": str(error)})
 
         if i < len(test_case_files) - 1:

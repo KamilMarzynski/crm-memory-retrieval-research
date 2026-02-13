@@ -161,9 +161,7 @@ def build_test_cases(
         memories_dir: Directory containing JSONL memory files.
         output_dir: Directory where test case JSON files will be written.
     """
-    print("Loading all memories...")
     all_memories = load_memories(memories_dir)
-    print(f"Loaded {len(all_memories)} memories")
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -173,32 +171,19 @@ def build_test_cases(
     skipped = 0
 
     for i, raw_file in enumerate(raw_files):
-        print(f"[{i + 1}/{len(raw_files)}] Processing {raw_file.name}...")
-
         try:
             test_case = build_test_case(str(raw_file), all_memories)
 
             if test_case is None:
-                print("  Skipped (no ground truth memories)")
                 skipped += 1
                 continue
 
             tc_path = output_path / f"{raw_file.stem}.json"
             save_json(test_case, tc_path)
-
-            print(
-                f"  Created test case with {test_case[FIELD_GROUND_TRUTH_COUNT]} ground truth memories"
-            )
             created += 1
 
-        except Exception as e:
-            print(f"  Error: {e}")
+        except Exception as error:
+            print(f"[{i + 1}/{len(raw_files)}] {raw_file.stem} — ERROR: {error}")
             skipped += 1
 
-    print("\n" + "=" * 60)
-    print("TEST CASE GENERATION SUMMARY")
-    print("=" * 60)
-    print(f"Test cases created: {created}")
-    print(f"PRs skipped (no ground truth): {skipped}")
-    print(f"Output directory: {output_dir}")
-    print("=" * 60)
+    print(f"Test cases: {created} created, {skipped} skipped (no ground truth)")
