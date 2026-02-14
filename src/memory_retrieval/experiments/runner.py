@@ -4,7 +4,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from memory_retrieval.experiments.metrics import analyze_query_performance, compute_metrics
+from memory_retrieval.experiments.metrics import (
+    analyze_query_performance,
+    compute_metrics,
+    pool_and_deduplicate_by_distance,
+    pool_and_deduplicate_by_rerank_score,
+)
 from memory_retrieval.infra.io import load_json, save_json
 from memory_retrieval.memories.schema import FIELD_DISTANCE, FIELD_RERANK_SCORE, FIELD_SITUATION
 from memory_retrieval.search.base import SearchBackend
@@ -24,47 +29,6 @@ class ExperimentConfig:
     distance_threshold: float = DEFAULT_DISTANCE_THRESHOLD
     reranker: Reranker | None = None
     rerank_text_strategies: dict[str, Callable[[dict[str, Any]], str]] | None = None
-
-
-def _pool_and_deduplicate(
-    query_results: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Pool results from all queries and deduplicate by memory ID."""
-    best_by_memory_id: dict[str, dict[str, Any]] = {}
-
-    for query_result in query_results:
-        for result in query_result.get("results", []):
-            memory_id = result["id"]
-            current_distance = result.get("distance", float("inf"))
-            best_distance = (
-                best_by_memory_id[memory_id].get("distance", float("inf"))
-                if memory_id in best_by_memory_id
-                else float("inf")
-            )
-            if current_distance < best_distance:
-                best_by_memory_id[memory_id] = result
-
-    return sorted(best_by_memory_id.values(), key=lambda x: x.get("distance", 0))
-
-
-def _pool_and_deduplicate_by_rerank_score(
-    per_query_reranked: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Pool reranked results from all queries, keeping the highest rerank score per memory."""
-    best_by_memory_id: dict[str, dict[str, Any]] = {}
-
-    for query_result in per_query_reranked:
-        for result in query_result["reranked"]:
-            memory_id = result["id"]
-            rerank_score = result.get(FIELD_RERANK_SCORE, float("-inf"))
-            if memory_id not in best_by_memory_id or rerank_score > best_by_memory_id[
-                memory_id
-            ].get(FIELD_RERANK_SCORE, float("-inf")):
-                best_by_memory_id[memory_id] = result
-
-    return sorted(
-        best_by_memory_id.values(), key=lambda x: x.get(FIELD_RERANK_SCORE, 0), reverse=True
-    )
 
 
 def _run_rerank_strategy(
@@ -95,7 +59,7 @@ def _run_rerank_strategy(
             }
         )
 
-    pooled_reranked = _pool_and_deduplicate_by_rerank_score(all_reranked_per_query)
+    pooled_reranked = pool_and_deduplicate_by_rerank_score(all_reranked_per_query)
 
     return {
         "pooled_count": len(pooled_reranked),
