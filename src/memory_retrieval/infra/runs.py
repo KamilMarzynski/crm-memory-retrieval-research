@@ -158,3 +158,13 @@ def update_run_status(
     metadata["pipeline_status"][stage] = stage_info
 
     _save_run_metadata(run_dir, metadata)
+
+
+def update_config_fingerprint(
+    run_dir: Path,
+    fingerprint: dict[str, Any],
+) -> None:
+    """Store a config fingerprint in run.json for cross-run comparison."""
+    metadata = _load_run_metadata(run_dir)
+    metadata["config_fingerprint"] = fingerprint
+    _save_run_metadata(run_dir, metadata)

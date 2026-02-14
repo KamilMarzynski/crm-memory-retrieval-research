@@ -10,6 +10,8 @@ Requires-Dist: numpy>=2.0.0
 Requires-Dist: ollama>=0.4.0
 Requires-Dist: requests>=2.32.5
 Requires-Dist: sentence-transformers>=3.0.0
+Requires-Dist: scipy>=1.14.0
+Requires-Dist: seaborn>=0.13.0
 Requires-Dist: sqlite-vec>=0.1.6
 
 # crm-memory-retrieval-research
