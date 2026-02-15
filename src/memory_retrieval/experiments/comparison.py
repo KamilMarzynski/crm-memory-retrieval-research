@@ -10,6 +10,8 @@ import numpy as np
 from scipy import stats as scipy_stats
 
 from memory_retrieval.experiments.metrics import (
+    compute_metrics_at_threshold,
+    compute_metrics_at_top_n,
     find_optimal_threshold,
     macro_average,
     pool_and_deduplicate_by_distance,
@@ -176,6 +178,11 @@ def generate_run_summary(
 ) -> dict[str, Any]:
     """Generate a run_summary.json from result files. Regenerable at any time.
 
+    Produces a structured summary with fair baseline vs rerank comparison:
+    - ``baseline``: distance threshold sweep and top-N sweep for pre-rerank candidates
+    - ``rerank_strategies``: per-strategy threshold and top-N sweeps
+    - ``macro_averaged``: pre_rerank (overfetched + at-optimal) and post_rerank per strategy
+
     Args:
         run_dir: Path to the run directory.
         strategies: List of rerank strategy names to include. If None, auto-detected from results.
@@ -207,6 +214,10 @@ def generate_run_summary(
 
     per_test_case: dict[str, dict[str, Any]] = {}
     all_pre_rerank_metrics: list[dict[str, float]] = []
+    n_values = list(range(1, top_n_max + 1))
+
+    # Collect distance-pooled experiments for global baseline sweeps
+    distance_experiments: list[dict[str, Any]] = []
 
     # Collect per-test-case data
     for result in successful_results:
@@ -225,43 +236,114 @@ def generate_run_summary(
             pre_metrics_clean = {
                 key: pre_metrics[key] for key in ["precision", "recall", "f1"] if key in pre_metrics
             }
-            # Compute MRR for pre-rerank
+            # Pool by distance for pre-rerank analysis
             pooled_by_distance = pool_and_deduplicate_by_distance(result.get("queries", []))
             pre_mrr = reciprocal_rank(
                 [entry["id"] for entry in pooled_by_distance], ground_truth_ids
             )
             pre_metrics_clean["mrr"] = pre_mrr
-            test_case_entry["pre_rerank"] = pre_metrics_clean
             all_pre_rerank_metrics.append(pre_metrics_clean)
 
-            # Per-strategy post-rerank at optimal threshold
+            # Store distance-pooled experiment for global baseline sweeps
+            distance_experiments.append(
+                {
+                    "ground_truth_ids": ground_truth_ids,
+                    "ranked_results": pooled_by_distance,
+                }
+            )
+
+            # Per-test-case pre-rerank: distance threshold sweep and top-N sweep
+            pre_rerank_entry: dict[str, Any] = {}
+
+            # Distance threshold sweep for this test case
+            if pooled_by_distance:
+                all_distances = [entry.get("distance", 0) for entry in pooled_by_distance]
+                max_distance = max(all_distances) if all_distances else 1.5
+                distance_thresholds = _build_threshold_range(0.0, max_distance, threshold_step)
+                tc_distance_sweep = sweep_threshold(
+                    [{"ground_truth_ids": ground_truth_ids, "ranked_results": pooled_by_distance}],
+                    distance_thresholds,
+                    score_field="distance",
+                    higher_is_better=False,
+                )
+                optimal_distance = find_optimal_threshold(tc_distance_sweep, metric="f1")
+                pre_rerank_entry["distance_threshold"] = {
+                    "optimal_threshold": round(optimal_distance.get("threshold", 0.0), 4),
+                    "at_optimal": {
+                        "precision": optimal_distance["precision"],
+                        "recall": optimal_distance["recall"],
+                        "f1": optimal_distance["f1"],
+                        "mrr": optimal_distance["mrr"],
+                    },
+                }
+
+            # Top-N sweep for this test case
+            if pooled_by_distance:
+                tc_top_n_sweep = sweep_top_n(
+                    [{"ground_truth_ids": ground_truth_ids, "ranked_results": pooled_by_distance}],
+                    n_values,
+                )
+                optimal_top_n = find_optimal_threshold(tc_top_n_sweep, metric="f1")
+                pre_rerank_entry["top_n"] = {
+                    "optimal_n": optimal_top_n.get("top_n", 1),
+                    "at_optimal": {
+                        "precision": optimal_top_n["precision"],
+                        "recall": optimal_top_n["recall"],
+                        "f1": optimal_top_n["f1"],
+                        "mrr": optimal_top_n["mrr"],
+                    },
+                }
+
+            test_case_entry["pre_rerank"] = pre_rerank_entry
+
+            # Per-strategy post-rerank: threshold sweep and top-N sweep
             test_case_entry["post_rerank"] = {}
             for strategy_name in strategies:
                 reranked = _get_reranked_results_for_strategy(result, strategy_name)
                 if not reranked:
                     continue
 
-                # Find optimal threshold for this test case
+                strategy_entry: dict[str, Any] = {}
+
+                # Rerank threshold sweep
                 all_scores = [entry["rerank_score"] for entry in reranked]
                 if all_scores:
                     max_score = max(all_scores)
-                    sweep_thresholds = _build_threshold_range(0.0, max_score, threshold_step)
-                    tc_sweep = sweep_threshold(
+                    rerank_thresholds = _build_threshold_range(0.0, max_score, threshold_step)
+                    tc_rerank_sweep = sweep_threshold(
                         [{"ground_truth_ids": ground_truth_ids, "ranked_results": reranked}],
-                        sweep_thresholds,
+                        rerank_thresholds,
                         score_field="rerank_score",
                         higher_is_better=True,
                     )
-                    optimal = find_optimal_threshold(tc_sweep, metric="f1")
-                    test_case_entry["post_rerank"][strategy_name] = {
-                        "optimal_threshold": optimal.get("threshold", 0.0),
+                    optimal_rerank = find_optimal_threshold(tc_rerank_sweep, metric="f1")
+                    strategy_entry["rerank_threshold"] = {
+                        "optimal_threshold": round(optimal_rerank.get("threshold", 0.0), 4),
                         "at_optimal": {
-                            "precision": optimal["precision"],
-                            "recall": optimal["recall"],
-                            "f1": optimal["f1"],
-                            "mrr": optimal["mrr"],
+                            "precision": optimal_rerank["precision"],
+                            "recall": optimal_rerank["recall"],
+                            "f1": optimal_rerank["f1"],
+                            "mrr": optimal_rerank["mrr"],
                         },
                     }
+
+                # Top-N sweep for reranked results
+                tc_rerank_top_n = sweep_top_n(
+                    [{"ground_truth_ids": ground_truth_ids, "ranked_results": reranked}],
+                    n_values,
+                )
+                optimal_rerank_top_n = find_optimal_threshold(tc_rerank_top_n, metric="f1")
+                strategy_entry["top_n"] = {
+                    "optimal_n": optimal_rerank_top_n.get("top_n", 1),
+                    "at_optimal": {
+                        "precision": optimal_rerank_top_n["precision"],
+                        "recall": optimal_rerank_top_n["recall"],
+                        "f1": optimal_rerank_top_n["f1"],
+                        "mrr": optimal_rerank_top_n["mrr"],
+                    },
+                }
+
+                test_case_entry["post_rerank"][strategy_name] = strategy_entry
         else:
             # Standard (no reranking) metrics
             metrics = result.get("metrics", {})
@@ -271,7 +353,7 @@ def generate_run_summary(
 
         per_test_case[test_case_id] = test_case_entry
 
-    # Macro-averaged metrics
+    # Build summary structure
     summary: dict[str, Any] = {
         "run_id": run_id,
         "generated_at": datetime.now().isoformat(),
@@ -282,10 +364,64 @@ def generate_run_summary(
     macro: dict[str, Any] = {}
 
     if is_reranking:
-        macro["pre_rerank"] = macro_average(all_pre_rerank_metrics)
+        # --- Baseline section: distance-sorted candidate sweeps ---
+        if distance_experiments:
+            # Distance threshold sweep
+            all_max_distances = [
+                max(entry.get("distance", 0) for entry in experiment["ranked_results"])
+                for experiment in distance_experiments
+                if experiment["ranked_results"]
+            ]
+            distance_global_max = max(all_max_distances) if all_max_distances else 1.5
+            distance_thresholds = _build_threshold_range(0.0, distance_global_max, threshold_step)
+            baseline_threshold_sweep = sweep_threshold(
+                distance_experiments,
+                distance_thresholds,
+                score_field="distance",
+                higher_is_better=False,
+            )
+            optimal_distance_threshold = find_optimal_threshold(
+                baseline_threshold_sweep, metric="f1"
+            )
 
-        # Post-rerank: macro-average across strategies with sweep
-        macro["post_rerank"] = {}
+            # Distance top-N sweep
+            baseline_top_n_sweep = sweep_top_n(distance_experiments, n_values)
+            optimal_distance_top_n = find_optimal_threshold(baseline_top_n_sweep, metric="f1")
+
+            summary["baseline"] = {
+                "note": "Pre-rerank metrics from distance-sorted candidates (overfetched for reranking)",
+                "distance_threshold_sweep": {
+                    "optimal_threshold": round(optimal_distance_threshold.get("threshold", 0.0), 4),
+                    "optimal_f1": round(optimal_distance_threshold["f1"], 4),
+                    "full_sweep": [
+                        {
+                            "threshold": round(entry["threshold"], 4),
+                            "precision": round(entry["precision"], 4),
+                            "recall": round(entry["recall"], 4),
+                            "f1": round(entry["f1"], 4),
+                            "mrr": round(entry["mrr"], 4),
+                        }
+                        for entry in baseline_threshold_sweep
+                    ],
+                },
+                "top_n_sweep": {
+                    "optimal_n": optimal_distance_top_n.get("top_n", 1),
+                    "optimal_f1": round(optimal_distance_top_n["f1"], 4),
+                    "full_sweep": [
+                        {
+                            "top_n": entry["top_n"],
+                            "precision": round(entry["precision"], 4),
+                            "recall": round(entry["recall"], 4),
+                            "f1": round(entry["f1"], 4),
+                            "mrr": round(entry["mrr"], 4),
+                        }
+                        for entry in baseline_top_n_sweep
+                    ],
+                },
+            }
+
+        # --- Rerank strategies section: per-strategy threshold + top-N sweeps ---
+        rerank_strategies_section: dict[str, Any] = {}
         for strategy_name in strategies:
             experiments_for_sweep = []
             for result in successful_results:
@@ -309,31 +445,23 @@ def generate_run_summary(
                 if experiment["ranked_results"]
             ]
             global_max = max(all_max_scores) if all_max_scores else 1.0
-            sweep_thresholds = _build_threshold_range(0.0, global_max, threshold_step)
+            rerank_thresholds = _build_threshold_range(0.0, global_max, threshold_step)
             threshold_sweep_results = sweep_threshold(
                 experiments_for_sweep,
-                sweep_thresholds,
+                rerank_thresholds,
                 score_field="rerank_score",
                 higher_is_better=True,
             )
             optimal_threshold = find_optimal_threshold(threshold_sweep_results, metric="f1")
 
-            macro["post_rerank"][strategy_name] = {
-                "optimal_threshold": optimal_threshold.get("threshold", 0.0),
-                "at_optimal": {
-                    "precision": optimal_threshold["precision"],
-                    "recall": optimal_threshold["recall"],
-                    "f1": optimal_threshold["f1"],
-                    "mrr": optimal_threshold["mrr"],
-                },
-            }
+            # Top-N sweep
+            top_n_sweep_results = sweep_top_n(experiments_for_sweep, n_values)
+            optimal_n_entry = find_optimal_threshold(top_n_sweep_results, metric="f1")
 
-            # Store full threshold sweep for first/best strategy
-            if "threshold_sweep" not in summary:
-                summary["threshold_sweep"] = {
-                    "strategy": strategy_name,
-                    "optimal_threshold": optimal_threshold.get("threshold", 0.0),
-                    "optimal_f1": optimal_threshold["f1"],
+            rerank_strategies_section[strategy_name] = {
+                "threshold_sweep": {
+                    "optimal_threshold": round(optimal_threshold.get("threshold", 0.0), 4),
+                    "optimal_f1": round(optimal_threshold["f1"], 4),
                     "full_sweep": [
                         {
                             "threshold": round(entry["threshold"], 4),
@@ -344,46 +472,139 @@ def generate_run_summary(
                         }
                         for entry in threshold_sweep_results
                     ],
-                }
-
-        # Top-N sweep (using first strategy)
-        primary_strategy = strategies[0]
-        top_n_experiments = []
-        for result in successful_results:
-            ground_truth_ids = set(result.get("ground_truth", {}).get("memory_ids", []))
-            reranked = _get_reranked_results_for_strategy(result, primary_strategy)
-            if reranked:
-                top_n_experiments.append(
-                    {
-                        "ground_truth_ids": ground_truth_ids,
-                        "ranked_results": reranked,
-                    }
-                )
-
-        if top_n_experiments:
-            n_values = list(range(1, top_n_max + 1))
-            top_n_sweep_results = sweep_top_n(top_n_experiments, n_values)
-            optimal_n_entry = find_optimal_threshold(top_n_sweep_results, metric="f1")
-            summary["top_n_sweep"] = {
-                "strategy": primary_strategy,
-                "optimal_n": optimal_n_entry.get("top_n", 1),
-                "full_sweep": [
-                    {
-                        "top_n": entry["top_n"],
-                        "precision": round(entry["precision"], 4),
-                        "recall": round(entry["recall"], 4),
-                        "f1": round(entry["f1"], 4),
-                        "mrr": round(entry["mrr"], 4),
-                    }
-                    for entry in top_n_sweep_results
-                ],
+                },
+                "top_n_sweep": {
+                    "optimal_n": optimal_n_entry.get("top_n", 1),
+                    "optimal_f1": round(optimal_n_entry["f1"], 4),
+                    "full_sweep": [
+                        {
+                            "top_n": entry["top_n"],
+                            "precision": round(entry["precision"], 4),
+                            "recall": round(entry["recall"], 4),
+                            "f1": round(entry["f1"], 4),
+                            "mrr": round(entry["mrr"], 4),
+                        }
+                        for entry in top_n_sweep_results
+                    ],
+                },
             }
+
+        summary["rerank_strategies"] = rerank_strategies_section
+
+        # --- Macro-averaged section ---
+        overfetched_macro = macro_average(all_pre_rerank_metrics)
+
+        pre_rerank_macro: dict[str, Any] = {
+            "overfetched": overfetched_macro,
+        }
+
+        # Add at-optimal distance threshold and top-N from baseline sweeps
+        baseline = summary.get("baseline", {})
+        distance_sweep_data = baseline.get("distance_threshold_sweep", {})
+        if distance_sweep_data:
+            pre_rerank_macro["at_optimal_distance_threshold"] = {
+                "optimal_threshold": distance_sweep_data["optimal_threshold"],
+                "precision": round(
+                    _find_sweep_entry_by_value(
+                        distance_sweep_data["full_sweep"],
+                        "threshold",
+                        distance_sweep_data["optimal_threshold"],
+                    ).get("precision", 0.0),
+                    4,
+                ),
+                "recall": round(
+                    _find_sweep_entry_by_value(
+                        distance_sweep_data["full_sweep"],
+                        "threshold",
+                        distance_sweep_data["optimal_threshold"],
+                    ).get("recall", 0.0),
+                    4,
+                ),
+                "f1": distance_sweep_data["optimal_f1"],
+                "mrr": round(
+                    _find_sweep_entry_by_value(
+                        distance_sweep_data["full_sweep"],
+                        "threshold",
+                        distance_sweep_data["optimal_threshold"],
+                    ).get("mrr", 0.0),
+                    4,
+                ),
+            }
+
+        top_n_sweep_data = baseline.get("top_n_sweep", {})
+        if top_n_sweep_data:
+            pre_rerank_macro["at_optimal_top_n"] = {
+                "optimal_n": top_n_sweep_data["optimal_n"],
+                "precision": round(
+                    _find_sweep_entry_by_value(
+                        top_n_sweep_data["full_sweep"],
+                        "top_n",
+                        top_n_sweep_data["optimal_n"],
+                    ).get("precision", 0.0),
+                    4,
+                ),
+                "recall": round(
+                    _find_sweep_entry_by_value(
+                        top_n_sweep_data["full_sweep"],
+                        "top_n",
+                        top_n_sweep_data["optimal_n"],
+                    ).get("recall", 0.0),
+                    4,
+                ),
+                "f1": top_n_sweep_data["optimal_f1"],
+                "mrr": round(
+                    _find_sweep_entry_by_value(
+                        top_n_sweep_data["full_sweep"],
+                        "top_n",
+                        top_n_sweep_data["optimal_n"],
+                    ).get("mrr", 0.0),
+                    4,
+                ),
+            }
+
+        macro["pre_rerank"] = pre_rerank_macro
+
+        # Post-rerank per strategy from rerank_strategies section
+        post_rerank_macro: dict[str, Any] = {}
+        for strategy_name, strategy_data in rerank_strategies_section.items():
+            threshold_data = strategy_data["threshold_sweep"]
+            top_n_data = strategy_data["top_n_sweep"]
+
+            optimal_threshold_entry = _find_sweep_entry_by_value(
+                threshold_data["full_sweep"],
+                "threshold",
+                threshold_data["optimal_threshold"],
+            )
+            optimal_top_n_entry = _find_sweep_entry_by_value(
+                top_n_data["full_sweep"],
+                "top_n",
+                top_n_data["optimal_n"],
+            )
+
+            post_rerank_macro[strategy_name] = {
+                "at_optimal_threshold": {
+                    "optimal_threshold": threshold_data["optimal_threshold"],
+                    "precision": round(optimal_threshold_entry.get("precision", 0.0), 4),
+                    "recall": round(optimal_threshold_entry.get("recall", 0.0), 4),
+                    "f1": threshold_data["optimal_f1"],
+                    "mrr": round(optimal_threshold_entry.get("mrr", 0.0), 4),
+                },
+                "at_optimal_top_n": {
+                    "optimal_n": top_n_data["optimal_n"],
+                    "precision": round(optimal_top_n_entry.get("precision", 0.0), 4),
+                    "recall": round(optimal_top_n_entry.get("recall", 0.0), 4),
+                    "f1": top_n_data["optimal_f1"],
+                    "mrr": round(optimal_top_n_entry.get("mrr", 0.0), 4),
+                },
+            }
+
+        macro["post_rerank"] = post_rerank_macro
     else:
         # Standard metrics macro-average
         all_metrics = [
-            per_test_case[tc_id]["metrics"]
-            for tc_id in per_test_case
-            if "metrics" in per_test_case[tc_id]
+            per_test_case[test_case_id]["metrics"]
+            for test_case_id in per_test_case
+            if "metrics" in per_test_case[test_case_id]
         ]
         macro["metrics"] = macro_average(all_metrics)
 
@@ -403,6 +624,25 @@ def _build_threshold_range(min_value: float, max_value: float, step: float) -> l
         thresholds.append(round(current, 4))
         current += step
     return thresholds
+
+
+def _find_sweep_entry_by_value(
+    full_sweep: list[dict[str, Any]],
+    key: str,
+    value: Any,
+) -> dict[str, Any]:
+    """Find the sweep entry whose key matches value (or closest match)."""
+    if not full_sweep:
+        return {}
+    # Exact match first
+    for entry in full_sweep:
+        if entry.get(key) == value:
+            return entry
+    # Closest match for numeric keys
+    try:
+        return min(full_sweep, key=lambda entry: abs(entry.get(key, float("inf")) - value))
+    except (TypeError, ValueError):
+        return full_sweep[0]
 
 
 # ---------------------------------------------------------------------------
@@ -492,9 +732,10 @@ def average_per_case_metrics_across_runs(
             per_tc = summary.get("per_test_case", {}).get(test_case_id, {})
             if metric_path == "post_rerank" and strategy:
                 post_rerank = per_tc.get("post_rerank", {}).get(strategy, {})
-                metrics = post_rerank.get("at_optimal", {})
+                metrics = post_rerank.get("rerank_threshold", {}).get("at_optimal", {})
             elif metric_path == "pre_rerank":
-                metrics = per_tc.get("pre_rerank", {})
+                pre_rerank = per_tc.get("pre_rerank", {})
+                metrics = pre_rerank.get("distance_threshold", {}).get("at_optimal", {})
             else:
                 metrics = per_tc.get("metrics", {})
 
@@ -521,11 +762,28 @@ def _extract_f1_from_macro(
     metric_path: str,
     strategy: str | None,
 ) -> float | None:
-    """Extract F1 from a macro_averaged or per_test_case metrics dict."""
+    """Extract F1 from a macro_averaged or per_test_case metrics dict.
+
+    Navigates the nested structure:
+    - macro level: at_optimal_threshold / at_optimal_distance_threshold
+    - per-test-case level: rerank_threshold.at_optimal / distance_threshold.at_optimal
+    """
     if metric_path == "post_rerank" and strategy:
-        return macro.get("post_rerank", {}).get(strategy, {}).get("at_optimal", {}).get("f1")
+        post_rerank = macro.get("post_rerank", {}).get(strategy, {})
+        # Macro level: at_optimal_threshold
+        f1 = post_rerank.get("at_optimal_threshold", {}).get("f1")
+        if f1 is not None:
+            return f1
+        # Per-test-case level: rerank_threshold.at_optimal
+        return post_rerank.get("rerank_threshold", {}).get("at_optimal", {}).get("f1")
     elif metric_path == "pre_rerank":
-        return macro.get("pre_rerank", {}).get("f1")
+        pre_rerank = macro.get("pre_rerank", {})
+        # Macro level: at_optimal_distance_threshold
+        f1 = pre_rerank.get("at_optimal_distance_threshold", {}).get("f1")
+        if f1 is not None:
+            return f1
+        # Per-test-case level: distance_threshold.at_optimal
+        return pre_rerank.get("distance_threshold", {}).get("at_optimal", {}).get("f1")
     else:
         return macro.get("metrics", {}).get("f1")
 
