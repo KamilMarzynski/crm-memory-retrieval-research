@@ -7,6 +7,7 @@ src/memory_retrieval.egg-info/dependency_links.txt
 src/memory_retrieval.egg-info/requires.txt
 src/memory_retrieval.egg-info/top_level.txt
 src/memory_retrieval/experiments/__init__.py
+src/memory_retrieval/experiments/comparison.py
 src/memory_retrieval/experiments/metrics.py
 src/memory_retrieval/experiments/query_generation.py
 src/memory_retrieval/experiments/runner.py
