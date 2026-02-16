@@ -19,8 +19,6 @@ from memory_retrieval.memories.schema import (
 from memory_retrieval.search.base import SearchResult
 from memory_retrieval.search.db_utils import deserialize_json_field, serialize_json_field
 
-# Ollama configuration
-OLLAMA_HOST: str | None = None
 DEFAULT_EMBEDDING_MODEL = "mxbai-embed-large"
 DEFAULT_VECTOR_DIMENSIONS = 1024
 
@@ -34,22 +32,9 @@ EMBEDDING_MODEL_DIMENSIONS: dict[str, int] = {
     "bge-m3": 1024,
 }
 
-# Backward-compatible aliases
-OLLAMA_MODEL = DEFAULT_EMBEDDING_MODEL
-VECTOR_DIMENSIONS = DEFAULT_VECTOR_DIMENSIONS
-
-_ollama_client = ollama.Client(host=OLLAMA_HOST) if OLLAMA_HOST else None
-
 
 def _serialize_f32(vector: list[float]) -> bytes:
     return struct.pack(f"{len(vector)}f", *vector)
-
-
-def get_embedding(text: str) -> list[float]:
-    """Module-level embedding function using default model. Kept for backward compatibility."""
-    client = _ollama_client or ollama
-    response = client.embed(model=DEFAULT_EMBEDDING_MODEL, input=text)
-    return response["embeddings"][0]
 
 
 def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
@@ -105,7 +90,7 @@ class VectorBackend:
             embedding_model, DEFAULT_VECTOR_DIMENSIONS
         )
         self._ollama_client: ollama.Client | None = (
-            ollama.Client(host=ollama_host) if ollama_host else _ollama_client
+            ollama.Client(host=ollama_host) if ollama_host else None
         )
 
     def _get_embedding(self, text: str) -> list[float]:
