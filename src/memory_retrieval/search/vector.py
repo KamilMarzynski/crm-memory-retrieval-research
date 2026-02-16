@@ -21,8 +21,22 @@ from memory_retrieval.search.db_utils import deserialize_json_field, serialize_j
 
 # Ollama configuration
 OLLAMA_HOST: str | None = None
-OLLAMA_MODEL = "mxbai-embed-large"
-VECTOR_DIMENSIONS = 1024
+DEFAULT_EMBEDDING_MODEL = "mxbai-embed-large"
+DEFAULT_VECTOR_DIMENSIONS = 1024
+
+# Known model → dimension mapping for automatic configuration
+EMBEDDING_MODEL_DIMENSIONS: dict[str, int] = {
+    "mxbai-embed-large": 1024,
+    "nomic-embed-text": 768,
+    "all-minilm": 384,
+    "snowflake-arctic-embed": 1024,
+    "bge-large": 1024,
+    "bge-m3": 1024,
+}
+
+# Backward-compatible aliases
+OLLAMA_MODEL = DEFAULT_EMBEDDING_MODEL
+VECTOR_DIMENSIONS = DEFAULT_VECTOR_DIMENSIONS
 
 _ollama_client = ollama.Client(host=OLLAMA_HOST) if OLLAMA_HOST else None
 
@@ -32,8 +46,9 @@ def _serialize_f32(vector: list[float]) -> bytes:
 
 
 def get_embedding(text: str) -> list[float]:
+    """Module-level embedding function using default model. Kept for backward compatibility."""
     client = _ollama_client or ollama
-    response = client.embed(model=OLLAMA_MODEL, input=text)
+    response = client.embed(model=DEFAULT_EMBEDDING_MODEL, input=text)
     return response["embeddings"][0]
 
 
@@ -69,7 +84,35 @@ def get_confidence_from_distance(distance: float) -> str:
 
 
 class VectorBackend:
-    """Vector search backend using sqlite-vec for embedding-based retrieval."""
+    """Vector search backend using sqlite-vec for embedding-based retrieval.
+
+    Args:
+        embedding_model: Ollama model name for generating embeddings.
+            Defaults to DEFAULT_EMBEDDING_MODEL ("mxbai-embed-large").
+        vector_dimensions: Embedding dimension size. If None, auto-detected from
+            EMBEDDING_MODEL_DIMENSIONS or falls back to DEFAULT_VECTOR_DIMENSIONS.
+        ollama_host: Custom Ollama host URL. If None, uses the default client.
+    """
+
+    def __init__(
+        self,
+        embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+        vector_dimensions: int | None = None,
+        ollama_host: str | None = None,
+    ) -> None:
+        self.embedding_model = embedding_model
+        self.vector_dimensions = vector_dimensions or EMBEDDING_MODEL_DIMENSIONS.get(
+            embedding_model, DEFAULT_VECTOR_DIMENSIONS
+        )
+        self._ollama_client: ollama.Client | None = (
+            ollama.Client(host=ollama_host) if ollama_host else _ollama_client
+        )
+
+    def _get_embedding(self, text: str) -> list[float]:
+        """Generate embedding for text using this backend's configured model."""
+        client = self._ollama_client or ollama
+        response = client.embed(model=self.embedding_model, input=text)
+        return response["embeddings"][0]
 
     def create_database(self, db_path: str) -> None:
         """Create database schema with memories table and vector index.
@@ -96,7 +139,7 @@ class VectorBackend:
             cursor.execute(f"""
                 CREATE VIRTUAL TABLE vec_memories USING vec0(
                     memory_id TEXT PRIMARY KEY,
-                    situation_embedding float[{VECTOR_DIMENSIONS}]
+                    situation_embedding float[{self.vector_dimensions}]
                 )
             """)
 
@@ -120,7 +163,7 @@ class VectorBackend:
 
                 try:
                     print(f"  [{i + 1}/{len(memories)}] Embedding {memory_id}...")
-                    embedding = get_embedding(situation)
+                    embedding = self._get_embedding(situation)
 
                     cursor.execute(
                         f"""
@@ -162,7 +205,7 @@ class VectorBackend:
         Returns:
             List of SearchResult objects sorted by cosine distance (ascending).
         """
-        query_embedding = get_embedding(query)
+        query_embedding = self._get_embedding(query)
 
         with get_db_connection(db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -213,7 +256,9 @@ class VectorBackend:
         memories = load_memories(memories_dir)
         print(f"Found {len(memories)} memories")
 
-        print("Inserting memories (generating embeddings via Ollama)...")
+        print(
+            f"Inserting memories (embedding via Ollama/{self.embedding_model}, dim={self.vector_dimensions})..."
+        )
         count = self.insert_memories(db_path, memories)
         print(f"Inserted {count} memories into database")
 

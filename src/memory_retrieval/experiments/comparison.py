@@ -142,9 +142,12 @@ def reconstruct_fingerprint_from_run(run_dir: Path) -> dict[str, Any]:
         if version_part.startswith("v"):
             query_prompt_version = version_part[1:]
 
+    # Read embedding_model from run.json if stored, fallback to default for old runs
+    embedding_model = run_metadata.get("embedding_model", "mxbai-embed-large")
+
     return build_config_fingerprint(
         extraction_prompt_version=extraction_prompt_version,
-        embedding_model="mxbai-embed-large",
+        embedding_model=embedding_model,
         search_backend="vector",
         search_limit=search_limit,
         distance_threshold=distance_threshold,
@@ -175,6 +178,7 @@ def generate_run_summary(
     strategies: list[str] | None = None,
     threshold_step: float = 0.005,
     top_n_max: int = 20,
+    results_dir: str | None = None,
 ) -> dict[str, Any]:
     """Generate a run_summary.json from result files. Regenerable at any time.
 
@@ -184,18 +188,29 @@ def generate_run_summary(
     - ``macro_averaged``: pre_rerank (overfetched + at-optimal) and post_rerank per strategy
 
     Args:
-        run_dir: Path to the run directory.
+        run_dir: Path to the run or subrun directory (summary is saved here).
         strategies: List of rerank strategy names to include. If None, auto-detected from results.
         threshold_step: Step size for threshold sweep.
         top_n_max: Maximum top-N value for sweep.
+        results_dir: Override for results directory (used for subruns).
     """
-    run_metadata = load_json(run_dir / "run.json")
-    run_id = run_metadata.get("run_id", run_dir.name)
+    # Try run.json first (parent runs), fall back to subrun.json (subruns)
+    run_json_path = run_dir / "run.json"
+    subrun_json_path = run_dir / "subrun.json"
+    if run_json_path.exists():
+        run_metadata = load_json(run_json_path)
+        run_id = run_metadata.get("run_id", run_dir.name)
+    elif subrun_json_path.exists():
+        run_metadata = load_json(subrun_json_path)
+        run_id = run_metadata.get("subrun_id", run_dir.name)
+    else:
+        run_metadata = {}
+        run_id = run_dir.name
 
-    results_dir = run_dir / "results"
-    result_files = sorted(results_dir.glob("*.json"))
+    resolved_results_dir = Path(results_dir) if results_dir else run_dir / "results"
+    result_files = sorted(resolved_results_dir.glob("*.json"))
     if not result_files:
-        raise FileNotFoundError(f"No result files found in {results_dir}")
+        raise FileNotFoundError(f"No result files found in {resolved_results_dir}")
 
     all_results = [load_json(file_path) for file_path in result_files]
     successful_results = [

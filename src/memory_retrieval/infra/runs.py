@@ -36,6 +36,8 @@ class NoRunsFoundError(Exception):
 DATA_DIR = Path("data")
 RUN_PREFIX = "run_"
 RUN_METADATA_FILE = "run.json"
+SUBRUNS_DIR = "subruns"
+SUBRUN_METADATA_FILE = "subrun.json"
 
 PHASE1 = "phase1"
 PHASE2 = "phase2"
@@ -168,3 +170,168 @@ def update_config_fingerprint(
     metadata = _load_run_metadata(run_dir)
     metadata["config_fingerprint"] = fingerprint
     _save_run_metadata(run_dir, metadata)
+
+
+# ---------------------------------------------------------------------------
+# Subrun system — nested experiments inside a parent run
+# ---------------------------------------------------------------------------
+
+
+def create_subrun(
+    parent_run_dir: Path,
+    subrun_id: str,
+    description: str | None = None,
+) -> Path:
+    """Create a subrun directory inside a parent run.
+
+    Subruns share the parent's memories JSONL, test_cases, and queries.
+    They have their own results/ directory and optionally their own memories.db
+    (when the embedding model changes).
+
+    Args:
+        parent_run_dir: Path to the parent run directory.
+        subrun_id: Short identifier for the subrun (e.g., "nomic_embed").
+        description: Optional human-readable description.
+
+    Returns:
+        Path to the created subrun directory.
+    """
+    if not (parent_run_dir / RUN_METADATA_FILE).exists():
+        raise ValueError(f"{parent_run_dir} is not a valid run directory (no {RUN_METADATA_FILE})")
+
+    if "/" in subrun_id or "\\" in subrun_id:
+        raise ValueError(f"subrun_id cannot contain path separators: {subrun_id}")
+
+    subrun_dir = parent_run_dir / SUBRUNS_DIR / subrun_id
+    subrun_dir.mkdir(parents=True, exist_ok=True)
+    (subrun_dir / "results").mkdir(exist_ok=True)
+
+    parent_metadata = _load_run_metadata(parent_run_dir)
+    parent_run_id = parent_metadata.get("run_id", parent_run_dir.name)
+
+    subrun_metadata: dict[str, Any] = {
+        "subrun_id": subrun_id,
+        "parent_run_id": parent_run_id,
+        "created_at": datetime.now().isoformat(),
+        "description": description,
+        "pipeline_status": {},
+    }
+
+    metadata_path = subrun_dir / SUBRUN_METADATA_FILE
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(subrun_metadata, f, indent=2, ensure_ascii=False)
+
+    return subrun_dir
+
+
+def list_subruns(parent_run_dir: Path) -> list[dict[str, Any]]:
+    """List all subruns of a given parent run.
+
+    Returns:
+        List of subrun metadata dicts, each including a "subrun_dir" key.
+    """
+    subruns_dir = parent_run_dir / SUBRUNS_DIR
+    if not subruns_dir.exists():
+        return []
+
+    subruns: list[dict[str, Any]] = []
+    for subrun_dir in sorted(subruns_dir.iterdir()):
+        if not subrun_dir.is_dir():
+            continue
+        metadata_path = subrun_dir / SUBRUN_METADATA_FILE
+        if metadata_path.exists():
+            with open(metadata_path, encoding="utf-8") as f:
+                metadata = json.load(f)
+            metadata["subrun_dir"] = subrun_dir
+            subruns.append(metadata)
+
+    return subruns
+
+
+def get_subrun(parent_run_dir: Path, subrun_id: str) -> Path:
+    """Get a specific subrun directory.
+
+    Args:
+        parent_run_dir: Path to the parent run directory.
+        subrun_id: The subrun identifier.
+
+    Returns:
+        Path to the subrun directory.
+
+    Raises:
+        FileNotFoundError: If the subrun does not exist.
+    """
+    subrun_dir = parent_run_dir / SUBRUNS_DIR / subrun_id
+    if not subrun_dir.exists():
+        raise FileNotFoundError(
+            f"Subrun '{subrun_id}' not found in {parent_run_dir}. Expected directory: {subrun_dir}"
+        )
+    return subrun_dir
+
+
+def get_subrun_db_path(subrun_dir: Path) -> str:
+    """Return the subrun's own memories.db if it exists, otherwise the parent's.
+
+    For embedder-change subruns, the caller rebuilds the DB in the subrun dir.
+    For reranker-only subruns, no DB is created and the parent's DB is used.
+
+    Args:
+        subrun_dir: Path to the subrun directory.
+
+    Returns:
+        String path to the appropriate memories.db file.
+    """
+    subrun_db = subrun_dir / "memories.db"
+    if subrun_db.exists():
+        return str(subrun_db)
+
+    # Fall back to parent's memories.db
+    parent_run_dir = subrun_dir.parent.parent  # subruns/<id> → subruns → parent
+    parent_db = parent_run_dir / "memories" / "memories.db"
+    return str(parent_db)
+
+
+def get_subrun_paths(subrun_dir: Path) -> dict[str, str]:
+    """Return all paths needed for experiments, resolving to parent paths where appropriate.
+
+    Subruns share memories JSONL, test_cases, and queries from the parent.
+    They have their own db_path (if embedder changed) and results_dir.
+
+    Args:
+        subrun_dir: Path to the subrun directory.
+
+    Returns:
+        Dict with keys: memories_dir, test_cases_dir, queries_dir, db_path, results_dir.
+    """
+    parent_run_dir = subrun_dir.parent.parent  # subruns/<id> → subruns → parent
+    return {
+        "memories_dir": str(parent_run_dir / "memories"),
+        "test_cases_dir": str(parent_run_dir / "test_cases"),
+        "queries_dir": str(parent_run_dir / "queries"),
+        "db_path": get_subrun_db_path(subrun_dir),
+        "results_dir": str(subrun_dir / "results"),
+    }
+
+
+def update_subrun_status(
+    subrun_dir: Path,
+    stage: str,
+    info: dict[str, Any] | None = None,
+) -> None:
+    """Update pipeline_status in subrun.json (mirrors update_run_status for subruns)."""
+    metadata_path = subrun_dir / SUBRUN_METADATA_FILE
+    if not metadata_path.exists():
+        raise FileNotFoundError(f"No {SUBRUN_METADATA_FILE} found in {subrun_dir}")
+
+    with open(metadata_path, encoding="utf-8") as f:
+        metadata = json.load(f)
+
+    if "pipeline_status" not in metadata:
+        metadata["pipeline_status"] = {}
+
+    stage_info: dict[str, Any] = dict(info) if info else {}
+    stage_info["completed_at"] = datetime.now().isoformat()
+    metadata["pipeline_status"][stage] = stage_info
+
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2, ensure_ascii=False)
