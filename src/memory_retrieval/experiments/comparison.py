@@ -704,6 +704,64 @@ def load_run_summaries(
     return summaries
 
 
+def load_subrun_summaries(
+    phase: str,
+    parent_run_ids: list[str] | None = None,
+    subrun_ids: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Load run summaries for subruns of existing parent runs.
+
+    Each returned summary has the same shape as load_run_summaries(), plus:
+    - "parent_run_id": which parent run this subrun belongs to
+    - "run_id": the subrun ID (e.g. "run_20260218_143022")
+
+    Args:
+        phase: "phase1" or "phase2".
+        parent_run_ids: Restrict to subruns of these parent runs. If None, walks all runs.
+        subrun_ids: Restrict to these subrun IDs only. If None, loads all subruns.
+
+    Returns:
+        List of summary dicts, one per subrun.
+    """
+    from memory_retrieval.infra.runs import get_subrun_paths, list_runs, list_subruns
+
+    runs = list_runs(phase)
+    if parent_run_ids is not None:
+        runs = [run for run in runs if run["run_id"] in parent_run_ids]
+
+    summaries = []
+    for run in runs:
+        parent_run_dir = run["run_dir"]
+        for subrun_metadata in list_subruns(parent_run_dir):
+            subrun_dir = subrun_metadata["subrun_dir"]
+            current_subrun_id = subrun_metadata.get("subrun_id", subrun_dir.name)
+
+            if subrun_ids is not None and current_subrun_id not in subrun_ids:
+                continue
+
+            summary_path = subrun_dir / RUN_SUMMARY_FILE
+            if summary_path.exists():
+                summary = load_json(summary_path)
+            else:
+                # Try generating on-the-fly if results exist
+                paths = get_subrun_paths(subrun_dir)
+                results_dir = Path(paths["results_dir"])
+                if not results_dir.exists() or not list(results_dir.glob("*.json")):
+                    continue
+                summary = generate_run_summary(subrun_dir, results_dir=paths["results_dir"])
+
+            # Attach fingerprint if stored in subrun.json
+            if "config_fingerprint" in subrun_metadata:
+                summary["config_fingerprint"] = subrun_metadata["config_fingerprint"]
+
+            summary["run_id"] = current_subrun_id
+            summary["parent_run_id"] = subrun_metadata.get("parent_run_id", parent_run_dir.name)
+            summary["run_dir"] = str(subrun_dir)
+            summaries.append(summary)
+
+    return summaries
+
+
 def group_runs_by_fingerprint(
     summaries: list[dict[str, Any]],
 ) -> dict[str, list[dict[str, Any]]]:
