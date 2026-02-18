@@ -26,14 +26,21 @@ class Reranker:
             print(f"Reranker model loaded in {elapsed:.1f}s")
 
     def score_pairs(self, query: str, documents: list[str]) -> list[float]:
+        """Score a single query against multiple documents."""
+        return self.score_all_pairs([(query, doc) for doc in documents])
+
+    def score_all_pairs(self, pairs: list[tuple[str, str]]) -> list[float]:
+        """Score a heterogeneous list of (query, document) pairs in a single model call.
+
+        More efficient than score_pairs called repeatedly when queries differ,
+        since model.predict() overhead is paid once for all pairs.
+        """
         self._load_model()
 
-        if not documents:
+        if not pairs:
             return []
 
-        pairs = [(query, doc) for doc in documents]
         scores = self._model.predict(pairs)
-
         return [float(s) for s in scores]
 
     def rerank(

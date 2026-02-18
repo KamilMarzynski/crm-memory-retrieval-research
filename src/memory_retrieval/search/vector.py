@@ -21,6 +21,7 @@ from memory_retrieval.search.db_utils import deserialize_json_field, serialize_j
 
 DEFAULT_EMBEDDING_MODEL = "mxbai-embed-large"
 DEFAULT_VECTOR_DIMENSIONS = 1024
+DEFAULT_EMBEDDING_CHUNK_SIZE = 100
 
 # Known model → dimension mapping for automatic configuration
 EMBEDDING_MODEL_DIMENSIONS: dict[str, int] = {
@@ -94,10 +95,29 @@ class VectorBackend:
         )
 
     def _get_embedding(self, text: str) -> list[float]:
-        """Generate embedding for text using this backend's configured model."""
+        """Generate embedding for a single text using this backend's configured model."""
         client = self._ollama_client or ollama
         response = client.embed(model=self.embedding_model, input=text)
         return response["embeddings"][0]
+
+    def _get_embeddings_batch(
+        self, texts: list[str], chunk_size: int = DEFAULT_EMBEDDING_CHUNK_SIZE
+    ) -> list[list[float]]:
+        """Generate embeddings for multiple texts in batch, chunked to avoid oversized requests.
+
+        Sends texts to Ollama in chunks, reducing HTTP round-trips from N to ceil(N/chunk_size).
+        """
+        client = self._ollama_client or ollama
+        chunks = [texts[i : i + chunk_size] for i in range(0, len(texts), chunk_size)]
+        all_embeddings: list[list[float]] = []
+
+        for chunk_index, chunk in enumerate(chunks):
+            if len(chunks) > 1:
+                print(f"  Embedding chunk {chunk_index + 1}/{len(chunks)} ({len(chunk)} texts)...")
+            response = client.embed(model=self.embedding_model, input=chunk)
+            all_embeddings.extend(response["embeddings"])
+
+        return all_embeddings
 
     def create_database(self, db_path: str) -> None:
         """Create database schema with memories table and vector index.
@@ -131,6 +151,9 @@ class VectorBackend:
     def insert_memories(self, db_path: str, memories: list[dict[str, Any]]) -> int:
         """Insert memories into the database and generate embeddings.
 
+        Generates all embeddings in a single batched Ollama request, then inserts
+        all rows into SQLite in one transaction.
+
         Args:
             db_path: Path to the SQLite database file.
             memories: List of memory dictionaries with id, situation, lesson, metadata, and source fields.
@@ -138,18 +161,26 @@ class VectorBackend:
         Returns:
             Number of memories successfully inserted.
         """
+        if not memories:
+            return 0
+
+        # Generate all embeddings in batch (1 HTTP call instead of N)
+        situations = [memory[FIELD_SITUATION] for memory in memories]
+        print(f"  Generating {len(situations)} embeddings via Ollama (batch)...")
+        try:
+            embeddings = self._get_embeddings_batch(situations)
+        except ollama.ResponseError as error:
+            print(f"  Batch embedding failed: {error}. Falling back to one-by-one.")
+            embeddings = [self._get_embedding(situation) for situation in situations]
+
+        # Insert all memories into SQLite in one transaction
         with get_db_connection(db_path) as conn:
             cursor = conn.cursor()
             inserted = 0
 
-            for i, memory in enumerate(memories):
+            for memory, embedding in zip(memories, embeddings, strict=True):
                 memory_id = memory[FIELD_ID]
-                situation = memory[FIELD_SITUATION]
-
                 try:
-                    print(f"  [{i + 1}/{len(memories)}] Embedding {memory_id}...")
-                    embedding = self._get_embedding(situation)
-
                     cursor.execute(
                         f"""
                         INSERT OR REPLACE INTO memories
@@ -158,13 +189,12 @@ class VectorBackend:
                         """,
                         (
                             memory_id,
-                            situation,
+                            memory[FIELD_SITUATION],
                             memory[FIELD_LESSON],
                             serialize_json_field(memory.get(FIELD_METADATA)),
                             serialize_json_field(memory.get(FIELD_SOURCE)),
                         ),
                     )
-
                     cursor.execute(
                         """
                         INSERT OR REPLACE INTO vec_memories (memory_id, situation_embedding)
@@ -172,10 +202,9 @@ class VectorBackend:
                         """,
                         (memory_id, _serialize_f32(embedding)),
                     )
-
                     inserted += 1
-                except (KeyError, sqlite3.Error, ollama.ResponseError) as e:
-                    print(f"  Warning: Skipping memory {memory_id}: {e}")
+                except (KeyError, sqlite3.Error) as error:
+                    print(f"  Warning: Skipping memory {memory_id}: {error}")
 
         return inserted
 

@@ -40,23 +40,41 @@ def _run_rerank_strategy(
 ) -> dict[str, Any]:
     """Run reranking for a single text strategy and return all pooled results.
 
-    All candidates are reranked and stored — no top-N filtering is applied here.
+    Collects all (query, document) pairs across every query into a single
+    model.predict() call, then redistributes scores back per query.
+    All candidates are stored — no top-N filtering here.
     Notebooks handle top-N and threshold analysis downstream.
     """
+    # Collect all (query, document) pairs in one flat list, carrying each candidate alongside
+    all_pairs: list[tuple[str, str]] = []
+    pair_metadata: list[tuple[int, dict[str, Any]]] = []  # (query_idx, candidate)
+
+    for query_idx, query_result in enumerate(query_results):
+        for candidate in query_result["results"]:
+            doc_text = text_fn(candidate) if text_fn else candidate[text_field]
+            all_pairs.append((query_result["query"], doc_text))
+            pair_metadata.append((query_idx, candidate))
+
+    # Single model.predict() call for all pairs
+    all_scores = reranker.score_all_pairs(all_pairs)
+
+    # Redistribute scores back to their query buckets
+    scored_candidates_per_query: list[list[dict[str, Any]]] = [[] for _ in query_results]
+    for (query_idx, candidate), score in zip(pair_metadata, all_scores):
+        enriched = dict(candidate)
+        enriched[FIELD_RERANK_SCORE] = score
+        scored_candidates_per_query[query_idx].append(enriched)
+
+    # Sort each query's results by rerank score descending
     all_reranked_per_query = []
-    for query_result in query_results:
-        reranked_for_query = reranker.rerank(
-            query_result["query"],
-            query_result["results"],
-            top_n=None,
-            text_field=text_field,
-            text_fn=text_fn,
+    for query_result, scored_candidates in zip(query_results, scored_candidates_per_query):
+        reranked_for_query = sorted(
+            scored_candidates,
+            key=lambda candidate: candidate[FIELD_RERANK_SCORE],
+            reverse=True,
         )
         all_reranked_per_query.append(
-            {
-                "query": query_result["query"],
-                "reranked": reranked_for_query,
-            }
+            {"query": query_result["query"], "reranked": reranked_for_query}
         )
 
     pooled_reranked = pool_and_deduplicate_by_rerank_score(all_reranked_per_query)

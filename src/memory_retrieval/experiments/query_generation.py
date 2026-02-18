@@ -1,7 +1,8 @@
 import json
 import os
 import re
-import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -28,8 +29,8 @@ MAX_QUERIES_PER_EXPERIMENT = 20
 TARGET_QUERY_WORDS_MIN = 20
 TARGET_QUERY_WORDS_MAX = 50
 
-# Batch execution configuration
-DEFAULT_SLEEP_BETWEEN_EXPERIMENTS = 1.0
+# Parallel execution configuration
+DEFAULT_MAX_WORKERS = 5
 
 
 def parse_queries_robust(response: str) -> list[str]:
@@ -69,7 +70,7 @@ class QueryGenerationConfig:
     prompt_version: str | None = None
     model: str = DEFAULT_MODEL
     use_sample_memories: bool = True
-    sleep_between: float = DEFAULT_SLEEP_BETWEEN_EXPERIMENTS
+    max_workers: int = DEFAULT_MAX_WORKERS
 
 
 def _get_random_sample_memories(
@@ -178,14 +179,18 @@ def generate_all_queries(
     db_path: str | None = None,
     search_backend: SearchBackend | None = None,
 ) -> list[dict[str, Any]]:
-    """Generate queries for all test cases. Calls LLM for each — costs money!
+    """Generate queries for all test cases in parallel. Calls LLM for each — costs money!
 
-    Returns list of query data dicts (one per test case).
+    Uses ThreadPoolExecutor to run LLM calls concurrently (I/O-bound).
+    Returns list of query data dicts (one per test case), in sorted file order.
     """
     test_case_files = sorted(Path(test_cases_dir).glob("*.json"))
-    all_query_data: list[dict[str, Any]] = []
+    total = len(test_case_files)
+    results_by_file: dict[Path, dict[str, Any]] = {}
+    completed_count = 0
+    print_lock = threading.Lock()
 
-    for i, test_case_file in enumerate(test_case_files):
+    def process_one(test_case_file: Path) -> tuple[Path, dict[str, Any]]:
         try:
             query_data = generate_queries_for_test_case(
                 str(test_case_file),
@@ -194,17 +199,31 @@ def generate_all_queries(
                 db_path=db_path,
                 search_backend=search_backend,
             )
-            all_query_data.append(query_data)
-            num_queries = len(query_data.get("queries", []))
-            print(f"[{i + 1}/{len(test_case_files)}] {test_case_file.stem} — {num_queries} queries")
+            return test_case_file, query_data
         except Exception as error:
-            print(f"[{i + 1}/{len(test_case_files)}] {test_case_file.stem} — ERROR: {error}")
-            all_query_data.append({"test_case_file": test_case_file.name, "error": str(error)})
+            return test_case_file, {"test_case_file": test_case_file.name, "error": str(error)}
 
-        if i < len(test_case_files) - 1:
-            time.sleep(config.sleep_between)
+    with ThreadPoolExecutor(max_workers=config.max_workers) as executor:
+        futures = [executor.submit(process_one, f) for f in test_case_files]
+        for future in as_completed(futures):
+            completed_file, query_data = future.result()
+            results_by_file[completed_file] = query_data
 
+            with print_lock:
+                completed_count += 1
+                if "error" in query_data:
+                    print(
+                        f"[{completed_count}/{total}] {completed_file.stem} — ERROR: {query_data['error']}"
+                    )
+                else:
+                    num_queries = len(query_data.get("queries", []))
+                    print(
+                        f"[{completed_count}/{total}] {completed_file.stem} — {num_queries} queries"
+                    )
+
+    # Return in deterministic sorted order
+    all_query_data = [results_by_file[f] for f in test_case_files]
     successful = [data for data in all_query_data if "queries" in data]
-    print(f"\nGenerated queries for {len(successful)}/{len(all_query_data)} test cases")
+    print(f"\nGenerated queries for {len(successful)}/{total} test cases")
 
     return all_query_data
