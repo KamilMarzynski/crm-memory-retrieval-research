@@ -9,10 +9,35 @@ if TYPE_CHECKING:
 
 DEFAULT_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
 
+QWEN3_RERANKER_MODELS = {
+    "tomaarsen/Qwen3-Reranker-0.6B-seq-cls",
+    "tomaarsen/Qwen3-Reranker-4B-seq-cls",
+    "tomaarsen/Qwen3-Reranker-8B-seq-cls",
+}
+
+DEFAULT_TASK_INSTRUCTION = (
+    "Given a code review search query, retrieve relevant engineering lessons"
+    " that match the described situation"
+)
+
+QWEN3_PREFIX = (
+    "<|im_start|>system\n"
+    "Judge whether the Document meets the requirements based on the Query and the Instruct provided."
+    ' Note that the answer can only be "yes" or "no".<|im_end|>\n'
+    "<|im_start|>user\n"
+)
+QWEN3_SUFFIX = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+
 
 class Reranker:
-    def __init__(self, model_name: str = DEFAULT_MODEL_NAME):
+    def __init__(
+        self,
+        model_name: str = DEFAULT_MODEL_NAME,
+        task_instruction: str = DEFAULT_TASK_INSTRUCTION,
+    ):
         self.model_name = model_name
+        self.task_instruction = task_instruction
+        self._is_qwen3 = model_name in QWEN3_RERANKER_MODELS
         self._model: CrossEncoder | None = None
 
     def _load_model(self) -> None:
@@ -24,6 +49,19 @@ class Reranker:
             self._model = CrossEncoder(self.model_name)
             elapsed = time.time() - start
             print(f"Reranker model loaded in {elapsed:.1f}s")
+
+    def _format_pair(self, query: str, document: str) -> tuple[str, str]:
+        """Format a (query, document) pair for the model.
+
+        BGE models use raw strings. Qwen3 models require chat-template wrapping
+        with instruction, query, and document tags.
+        """
+        if not self._is_qwen3:
+            return (query, document)
+
+        formatted_query = f"{QWEN3_PREFIX}<Instruct>: {self.task_instruction}\n<Query>: {query}\n"
+        formatted_document = f"<Document>: {document}{QWEN3_SUFFIX}"
+        return (formatted_query, formatted_document)
 
     def score_pairs(self, query: str, documents: list[str]) -> list[float]:
         """Score a single query against multiple documents."""
@@ -40,8 +78,9 @@ class Reranker:
         if not pairs:
             return []
 
-        scores = self._model.predict(pairs)
-        return [float(s) for s in scores]
+        formatted_pairs = [self._format_pair(query, document) for query, document in pairs]
+        scores = self._model.predict(formatted_pairs)
+        return [float(score) for score in scores]
 
     def rerank(
         self,
