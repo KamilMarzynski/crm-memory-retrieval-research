@@ -7,7 +7,6 @@ from typing import Any
 from memory_retrieval.experiments.metrics import (
     analyze_query_performance,
     compute_metrics,
-    pool_and_deduplicate_by_distance,
     pool_and_deduplicate_by_rerank_score,
 )
 from memory_retrieval.infra.io import load_json, save_json

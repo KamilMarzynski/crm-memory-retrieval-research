@@ -53,25 +53,33 @@ from memory_retrieval.memories.extractor import ExtractionConfig, SituationForma
 from memory_retrieval.search.reranker import Reranker
 from memory_retrieval.search.vector import VectorBackend
 
+RERANK_TEXT_STRATEGIES = {
+    "situation_only": lambda c: c["situation"],
+    "situation_and_lesson": lambda c: f"situation: {c['situation']}; lesson: {c.get('lesson', '')}",
+}
+
 # --- Full pipeline config ---
 full_pipeline_config = BatchFullPipelineConfig(
     phase=PHASE2,
-    num_runs=10,
+    num_runs=20,
     extraction_config=ExtractionConfig(
         situation_format=SituationFormat.SINGLE,
         prompts_dir="data/prompts/phase2",
+        prompt_version="3.0.0",
         model="anthropic/claude-haiku-4.5",
     ),
     query_config=QueryGenerationConfig(
         prompts_dir="data/prompts/phase2",
+        prompt_version="3.0.0",
         model="anthropic/claude-sonnet-4.5",
     ),
     experiment_config=ExperimentConfig(
         search_backend=VectorBackend(),
         reranker=Reranker(),
+        rerank_text_strategies=RERANK_TEXT_STRATEGIES,
     ),
     raw_data_dir="data/review_data",
-    description="Config A - sonnet query model + bge-reranker-v2-m3",
+    description="Config - bge-reranker-v2-m3 + mxbai-embed-large + prompt v3 situation haiku 4.5 + prompt v3 query sonnet 4.5 + situation_only and situation_and_lesson",
 )
 
 # ============================================================
@@ -81,19 +89,49 @@ full_pipeline_config = BatchFullPipelineConfig(
 
 # Load run IDs from a previous full pipeline batch (copy from batch_manifest.json)
 parent_run_ids = [
-    # "run_20260218_143022",
-    # "run_20260218_145301",
-    # ... add more
+    # batch_20260218_171450 (10 runs)
+    "run_20260218_171450",
+    "run_20260218_172142",
+    "run_20260218_172742",
+    "run_20260218_173357",
+    "run_20260218_174001",
+    "run_20260218_174543",
+    "run_20260218_175141",
+    "run_20260218_175735",
+    "run_20260218_180331",
+    "run_20260218_180931",
+    # batch_20260218_202350 (20 runs)
+    "run_20260218_202350",
+    "run_20260218_202928",
+    "run_20260218_203520",
+    "run_20260218_204111",
+    "run_20260218_204655",
+    "run_20260218_205227",
+    "run_20260218_205757",
+    "run_20260218_210347",
+    "run_20260218_210936",
+    "run_20260218_211505",
+    "run_20260218_212111",
+    "run_20260218_212700",
+    "run_20260218_213251",
+    "run_20260218_213822",
+    "run_20260218_214416",
+    "run_20260218_214957",
+    "run_20260218_215532",
+    "run_20260218_220111",
+    "run_20260218_220653",
+    "run_20260218_221228",
 ]
 
 subrun_config = BatchSubrunConfig(
     phase=PHASE2,
     parent_run_ids=parent_run_ids,
     experiment_config=ExperimentConfig(
-        search_backend=VectorBackend(),
-        reranker=Reranker(model_name="BAAI/bge-reranker-v2-m3"),
+        search_backend=VectorBackend(embedding_model="snowflake-arctic-embed"),
+        reranker=Reranker(),
+        rerank_text_strategies=RERANK_TEXT_STRATEGIES,
     ),
-    rebuild_db=False,  # True only if switching embedding model
+    rebuild_db=True,  # True only if switching embedding model
     description="Subrun batch - testing new reranker config",
 )
 
@@ -103,10 +141,10 @@ subrun_config = BatchSubrunConfig(
 
 if __name__ == "__main__":
     # --- Full pipeline batch ---
-    outcome = run_full_pipeline_batch(full_pipeline_config)
+    # outcome = run_full_pipeline_batch(full_pipeline_config)
 
-    # --- Subrun batch (uncomment to use instead) ---
-    # outcome = run_subrun_batch(subrun_config)
+    # --- Subrun batch ---
+    outcome = run_subrun_batch(subrun_config)
 
     # Print summary
     print(f"\nBatch complete: {outcome.batch_dir}")
