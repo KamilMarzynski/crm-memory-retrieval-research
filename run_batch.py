@@ -126,12 +126,12 @@ subrun_config = BatchSubrunConfig(
     phase=PHASE2,
     parent_run_ids=parent_run_ids,
     experiment_config=ExperimentConfig(
-        search_backend=VectorBackend(embedding_model="snowflake-arctic-embed"),
-        reranker=Reranker(),
+        search_backend=VectorBackend(),
+        reranker=Reranker(model_name="tomaarsen/Qwen3-Reranker-0.6B-seq-cls"),
         rerank_text_strategies=RERANK_TEXT_STRATEGIES,
     ),
-    rebuild_db=True,  # True only if switching embedding model
-    description="Subrun batch - testing new reranker config",
+    rebuild_db=False,  # True only if switching embedding model
+    description="Subrun batch - testing Qwen3-Reranker-0.6B",
 )
 
 # ============================================================

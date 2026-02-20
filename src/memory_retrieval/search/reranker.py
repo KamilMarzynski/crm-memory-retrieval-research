@@ -16,7 +16,7 @@ QWEN3_RERANKER_MODELS = {
 }
 
 DEFAULT_TASK_INSTRUCTION = (
-    "Given a code review search query, retrieve relevant engineering lessons"
+    "Given a query based on code review data, retrieve relevant past review descriptions"
     " that match the described situation"
 )
 
