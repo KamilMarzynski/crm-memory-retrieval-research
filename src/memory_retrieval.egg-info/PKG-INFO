@@ -9,6 +9,7 @@ Requires-Dist: matplotlib>=3.9.0
 Requires-Dist: numpy>=2.0.0
 Requires-Dist: ollama>=0.4.0
 Requires-Dist: requests>=2.32.5
+Requires-Dist: retrieval-metrics
 Requires-Dist: sentence-transformers>=3.0.0
 Requires-Dist: scipy>=1.14.0
 Requires-Dist: seaborn>=0.13.0

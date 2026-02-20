@@ -43,7 +43,6 @@ THREE USAGE PATTERNS
 from memory_retrieval.experiments.batch_runner import (
     BatchFullPipelineConfig,
     BatchSubrunConfig,
-    run_full_pipeline_batch,
     run_subrun_batch,
 )
 from memory_retrieval.experiments.query_generation import QueryGenerationConfig

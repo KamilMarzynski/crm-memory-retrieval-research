@@ -4,11 +4,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from memory_retrieval.experiments.metrics import (
-    analyze_query_performance,
-    compute_metrics,
-    pool_and_deduplicate_by_rerank_score,
-)
+from retrieval_metrics.compute import compute_set_metrics
+from retrieval_metrics.diagnostics import analyze_query_diagnostics
+
+from memory_retrieval.experiments.metrics import pool_and_deduplicate_by_rerank_score
+from memory_retrieval.experiments.metrics_adapter import metric_point_to_dict
 from memory_retrieval.infra.io import load_json, save_json
 from memory_retrieval.memories.schema import FIELD_DISTANCE, FIELD_RERANK_SCORE, FIELD_SITUATION
 from memory_retrieval.search.base import SearchBackend
@@ -59,14 +59,16 @@ def _run_rerank_strategy(
 
     # Redistribute scores back to their query buckets
     scored_candidates_per_query: list[list[dict[str, Any]]] = [[] for _ in query_results]
-    for (query_idx, candidate), score in zip(pair_metadata, all_scores):
+    for (query_idx, candidate), score in zip(pair_metadata, all_scores, strict=True):
         enriched = dict(candidate)
         enriched[FIELD_RERANK_SCORE] = score
         scored_candidates_per_query[query_idx].append(enriched)
 
     # Sort each query's results by rerank score descending
     all_reranked_per_query = []
-    for query_result, scored_candidates in zip(query_results, scored_candidates_per_query):
+    for query_result, scored_candidates in zip(
+        query_results, scored_candidates_per_query, strict=True
+    ):
         reranked_for_query = sorted(
             scored_candidates,
             key=lambda candidate: candidate[FIELD_RERANK_SCORE],
@@ -201,10 +203,14 @@ def run_experiment(
             for entry in query_result["results"]
             if entry.get("distance", 0) <= config.distance_threshold
         }
-        pre_rerank_metrics = compute_metrics(pre_rerank_threshold_ids, ground_truth_ids)
+        pre_rerank_metrics = metric_point_to_dict(
+            compute_set_metrics(pre_rerank_threshold_ids, ground_truth_ids)
+        )
 
         result["pre_rerank_metrics"] = {
-            **pre_rerank_metrics,
+            "precision": pre_rerank_metrics["precision"],
+            "recall": pre_rerank_metrics["recall"],
+            "f1": pre_rerank_metrics["f1"],
             "total_unique_retrieved": len(all_retrieved_ids),
             "total_within_threshold": len(pre_rerank_threshold_ids),
             "ground_truth_retrieved": len(pre_rerank_threshold_ids & ground_truth_ids),
@@ -252,15 +258,27 @@ def run_experiment(
         else:
             filtered_retrieved_ids = all_retrieved_ids
 
-        metrics = compute_metrics(filtered_retrieved_ids, ground_truth_ids)
-        query_analysis = analyze_query_performance(query_results)
+        metrics = metric_point_to_dict(compute_set_metrics(filtered_retrieved_ids, ground_truth_ids))
+        query_analysis = analyze_query_diagnostics(
+            query_results,
+            relevance_key="is_ground_truth",
+            score_key="distance",
+        )
+        for query_entry in query_analysis.get("best_queries", []):
+            query_entry["avg_distance"] = query_entry.pop("avg_score", None)
+            query_entry["min_distance"] = query_entry.pop("min_score", None)
+        for query_entry in query_analysis.get("worst_queries", []):
+            query_entry["avg_distance"] = query_entry.pop("avg_score", None)
+            query_entry["min_distance"] = query_entry.pop("min_score", None)
 
         result["metrics"] = {
             "total_queries": len(queries),
             "total_unique_retrieved": len(all_retrieved_ids),
             "total_within_threshold": len(filtered_retrieved_ids),
             "ground_truth_retrieved": len(filtered_retrieved_ids & ground_truth_ids),
-            **metrics,
+            "precision": metrics["precision"],
+            "recall": metrics["recall"],
+            "f1": metrics["f1"],
         }
         result["query_analysis"] = query_analysis
         result["retrieved_ground_truth_ids"] = sorted(

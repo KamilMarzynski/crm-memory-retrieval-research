@@ -7,12 +7,15 @@ src/memory_retrieval.egg-info/dependency_links.txt
 src/memory_retrieval.egg-info/requires.txt
 src/memory_retrieval.egg-info/top_level.txt
 src/memory_retrieval/experiments/__init__.py
+src/memory_retrieval/experiments/batch_runner.py
 src/memory_retrieval/experiments/comparison.py
 src/memory_retrieval/experiments/metrics.py
+src/memory_retrieval/experiments/metrics_adapter.py
 src/memory_retrieval/experiments/query_generation.py
 src/memory_retrieval/experiments/runner.py
 src/memory_retrieval/experiments/test_cases.py
 src/memory_retrieval/infra/__init__.py
+src/memory_retrieval/infra/figures.py
 src/memory_retrieval/infra/io.py
 src/memory_retrieval/infra/llm.py
 src/memory_retrieval/infra/prompts.py
@@ -29,3 +32,5 @@ src/memory_retrieval/search/db_utils.py
 src/memory_retrieval/search/fts5.py
 src/memory_retrieval/search/reranker.py
 src/memory_retrieval/search/vector.py
+tests/test_comparison_migration.py
+tests/test_metrics_migration_adapter.py

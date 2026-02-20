@@ -1,23 +1,35 @@
 """Cross-run comparison: fingerprinting, summaries, variance analysis, and A/B testing."""
 
-import hashlib
-import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-from scipy import stats as scipy_stats
+from retrieval_metrics.compare import (
+    compare_run_groups as retrieval_compare_run_groups,
+)
+from retrieval_metrics.compare import (
+    compute_variance_report as retrieval_compute_variance_report,
+)
+from retrieval_metrics.fingerprint import (
+    build_fingerprint as retrieval_build_fingerprint,
+)
+from retrieval_metrics.fingerprint import (
+    fingerprint_diff as retrieval_fingerprint_diff,
+)
 
 from memory_retrieval.experiments.metrics import (
-    compute_metrics_at_threshold,
-    compute_metrics_at_top_n,
     find_optimal_threshold,
     macro_average,
     pool_and_deduplicate_by_distance,
     reciprocal_rank,
     sweep_threshold,
     sweep_top_n,
+)
+from memory_retrieval.experiments.metrics_adapter import (
+    build_macro_run_metric_extractor,
+    build_per_case_metric_extractor,
+    extract_metric_from_nested,
 )
 from memory_retrieval.experiments.runner import DEFAULT_DISTANCE_THRESHOLD, DEFAULT_SEARCH_LIMIT
 from memory_retrieval.infra.io import load_json, save_json
@@ -46,7 +58,7 @@ def build_config_fingerprint(
     The fingerprint captures every pipeline parameter that affects results.
     Same hash = same config; any result difference is LLM variance.
     """
-    fingerprint: dict[str, Any] = {
+    fingerprint_payload: dict[str, Any] = {
         "extraction_prompt_version": extraction_prompt_version,
         "embedding_model": embedding_model,
         "search_backend": search_backend,
@@ -59,15 +71,12 @@ def build_config_fingerprint(
         if rerank_text_strategies
         else None,
     }
-    fingerprint["fingerprint_hash"] = _compute_fingerprint_hash(fingerprint)
-    return fingerprint
+    return retrieval_build_fingerprint(fingerprint_payload, hash_len=8)
 
 
 def _compute_fingerprint_hash(fingerprint: dict[str, Any]) -> str:
     """Compute first 8 chars of SHA-256 of sorted JSON (excluding hash itself)."""
-    hashable = {key: value for key, value in fingerprint.items() if key != "fingerprint_hash"}
-    canonical = json.dumps(hashable, sort_keys=True, ensure_ascii=True)
-    return hashlib.sha256(canonical.encode()).hexdigest()[:8]
+    return retrieval_build_fingerprint(fingerprint, hash_len=8)["fingerprint_hash"]
 
 
 def fingerprint_diff(
@@ -78,16 +87,7 @@ def fingerprint_diff(
 
     Returns dict of {field: {"a": value_a, "b": value_b}} for fields that differ.
     """
-    diff = {}
-    all_keys = set(fingerprint_a) | set(fingerprint_b)
-    for key in sorted(all_keys):
-        if key == "fingerprint_hash":
-            continue
-        value_a = fingerprint_a.get(key)
-        value_b = fingerprint_b.get(key)
-        if value_a != value_b:
-            diff[key] = {"a": value_a, "b": value_b}
-    return diff
+    return retrieval_fingerprint_diff(fingerprint_a, fingerprint_b)
 
 
 def reconstruct_fingerprint_from_run(run_dir: Path) -> dict[str, Any]:
@@ -841,24 +841,7 @@ def _extract_f1_from_macro(
     - macro level: at_optimal_threshold / at_optimal_distance_threshold
     - per-test-case level: rerank_threshold.at_optimal / distance_threshold.at_optimal
     """
-    if metric_path == "post_rerank" and strategy:
-        post_rerank = macro.get("post_rerank", {}).get(strategy, {})
-        # Macro level: at_optimal_threshold
-        f1 = post_rerank.get("at_optimal_threshold", {}).get("f1")
-        if f1 is not None:
-            return f1
-        # Per-test-case level: rerank_threshold.at_optimal
-        return post_rerank.get("rerank_threshold", {}).get("at_optimal", {}).get("f1")
-    elif metric_path == "pre_rerank":
-        pre_rerank = macro.get("pre_rerank", {})
-        # Macro level: at_optimal_distance_threshold
-        f1 = pre_rerank.get("at_optimal_distance_threshold", {}).get("f1")
-        if f1 is not None:
-            return f1
-        # Per-test-case level: distance_threshold.at_optimal
-        return pre_rerank.get("distance_threshold", {}).get("at_optimal", {}).get("f1")
-    else:
-        return macro.get("metrics", {}).get("f1")
+    return extract_metric_from_nested(macro, metric_path, strategy, metric_key="f1")
 
 
 def compute_variance_report(
@@ -876,77 +859,27 @@ def compute_variance_report(
     Returns:
         Dict with run-level and per-test-case variance statistics.
     """
-    num_runs = len(summaries)
-    if num_runs < 2:
-        return {
-            "num_runs": num_runs,
-            "error": "Need at least 2 runs for variance analysis",
-        }
+    run_value_extractor = build_macro_run_metric_extractor(metric_path=metric_path, strategy=strategy)
+    per_case_extractor = build_per_case_metric_extractor(metric_path=metric_path, strategy=strategy)
+    report = retrieval_compute_variance_report(
+        run_summaries=summaries,
+        metric_key="f1",
+        run_value_extractor=run_value_extractor,
+        per_case_value_extractor=per_case_extractor,
+    )
 
-    # Run-level: macro-averaged F1 per run
-    run_f1_values = []
-    for summary in summaries:
-        f1 = _extract_f1_from_macro(summary.get("macro_averaged", {}), metric_path, strategy)
-        if f1 is not None:
-            run_f1_values.append(f1)
-
-    run_level = _compute_summary_stats(run_f1_values)
-    run_level["individual_f1_values"] = run_f1_values
-
-    # Per-test-case variance
-    all_test_case_ids: set[str] = set()
-    for summary in summaries:
-        all_test_case_ids.update(summary.get("per_test_case", {}).keys())
-
-    per_test_case_variance: dict[str, dict[str, Any]] = {}
-    for test_case_id in sorted(all_test_case_ids):
-        f1_values = []
-        for summary in summaries:
-            per_tc = summary.get("per_test_case", {}).get(test_case_id, {})
-            f1 = _extract_f1_from_macro(per_tc, metric_path, strategy)
-            if f1 is not None:
-                f1_values.append(f1)
-
-        if len(f1_values) >= 2:
-            per_test_case_variance[test_case_id] = _compute_summary_stats(f1_values)
+    # Preserve backward-compatible output keys.
+    run_level = report.get("run_level", {})
+    if "individual_values" in run_level:
+        run_level["individual_f1_values"] = run_level.pop("individual_values")
 
     return {
-        "num_runs": num_runs,
+        "num_runs": report.get("num_runs", len(summaries)),
         "strategy": strategy,
         "metric_path": metric_path,
         "run_level": run_level,
-        "per_test_case": per_test_case_variance,
-    }
-
-
-def _compute_summary_stats(values: list[float]) -> dict[str, float]:
-    """Compute mean, std, 95% CI, and CV for a list of values."""
-    num_values = len(values)
-    if num_values < 2:
-        return {
-            "mean": values[0] if values else 0.0,
-            "std": 0.0,
-            "ci_95_lower": values[0] if values else 0.0,
-            "ci_95_upper": values[0] if values else 0.0,
-            "cv": 0.0,
-            "n": num_values,
-        }
-
-    arr = np.array(values)
-    mean = float(np.mean(arr))
-    std = float(np.std(arr, ddof=1))
-
-    # 95% CI using t-distribution
-    t_value = scipy_stats.t.ppf(0.975, df=num_values - 1)
-    margin = t_value * std / np.sqrt(num_values)
-
-    return {
-        "mean": round(mean, 4),
-        "std": round(std, 4),
-        "ci_95_lower": round(mean - margin, 4),
-        "ci_95_upper": round(mean + margin, 4),
-        "cv": round(std / mean, 4) if mean > 0 else 0.0,
-        "n": num_values,
+        "per_test_case": report.get("per_case", {}),
+        **({"error": report["error"]} if "error" in report else {}),
     }
 
 
@@ -971,94 +904,46 @@ def compare_configs(
     Returns:
         Dict with paired differences, bootstrap CI, Wilcoxon test, and significance assessment.
     """
-    # Average per-case metrics across runs within each config
-    averaged_a = average_per_case_metrics_across_runs(summaries_a, metric_path, strategy)
-    averaged_b = average_per_case_metrics_across_runs(summaries_b, metric_path, strategy)
+    per_case_extractor = build_per_case_metric_extractor(metric_path=metric_path, strategy=strategy)
+    comparison = retrieval_compare_run_groups(
+        group_a=summaries_a,
+        group_b=summaries_b,
+        metric_key="f1",
+        bootstrap_iterations=bootstrap_iterations,
+        per_case_value_extractor=per_case_extractor,
+    )
 
-    # Find common test cases
-    common_test_cases = sorted(set(averaged_a.keys()) & set(averaged_b.keys()))
-    if len(common_test_cases) < 3:
+    # Preserve backward-compatible keys and shape.
+    if "error" in comparison:
+        common_case_ids = comparison.get("common_case_ids", [])
         return {
-            "error": f"Only {len(common_test_cases)} common test cases — need at least 3 for comparison",
-            "common_test_cases": common_test_cases,
+            "error": comparison["error"],
+            "common_test_cases": common_case_ids,
         }
 
-    # Compute paired differences
-    paired_differences: list[dict[str, Any]] = []
-    f1_diffs: list[float] = []
-    for test_case_id in common_test_cases:
-        f1_a = averaged_a[test_case_id].get("f1", 0.0)
-        f1_b = averaged_b[test_case_id].get("f1", 0.0)
-        diff = f1_b - f1_a  # positive = B is better
-        f1_diffs.append(diff)
+    paired_differences = []
+    for entry in comparison.get("paired_differences", []):
         paired_differences.append(
             {
-                "test_case_id": test_case_id,
-                "f1_a": round(f1_a, 4),
-                "f1_b": round(f1_b, 4),
-                "diff": round(diff, 4),
+                "test_case_id": entry.get("test_case_id", entry["case_id"]),
+                "f1_a": round(float(entry.get("f1_a", entry["metric_a"])), 4),
+                "f1_b": round(float(entry.get("f1_b", entry["metric_b"])), 4),
+                "diff": round(float(entry["diff"]), 4),
             }
         )
 
-    diffs_array = np.array(f1_diffs)
-    mean_diff = float(np.mean(diffs_array))
-
-    # 1. Bootstrap CI of mean delta
-    rng = np.random.default_rng(seed=42)
-    bootstrap_means = []
-    for _ in range(bootstrap_iterations):
-        resample = rng.choice(diffs_array, size=len(diffs_array), replace=True)
-        bootstrap_means.append(float(np.mean(resample)))
-    bootstrap_means_arr = np.array(bootstrap_means)
-    bootstrap_ci_lower = float(np.percentile(bootstrap_means_arr, 2.5))
-    bootstrap_ci_upper = float(np.percentile(bootstrap_means_arr, 97.5))
-
-    # 2. Wilcoxon signed-rank test
-    try:
-        wilcoxon_stat, wilcoxon_p = scipy_stats.wilcoxon(diffs_array, alternative="two-sided")
-        wilcoxon_result = {
-            "statistic": float(wilcoxon_stat),
-            "p_value": float(wilcoxon_p),
-        }
-    except ValueError:
-        # All differences are zero
-        wilcoxon_result = {"statistic": 0.0, "p_value": 1.0}
-
-    # 3. Practical significance
-    abs_mean_diff = abs(mean_diff)
-    p_value = wilcoxon_result["p_value"]
-
-    if abs_mean_diff >= 0.03 and p_value < 0.05:
-        significance = "significant"
-    elif abs_mean_diff >= 0.01 and p_value < 0.10:
-        significance = "marginal"
-    else:
-        significance = "not_significant"
-
-    # Direction
-    if mean_diff > 0.001:
-        direction = "b_better"
-    elif mean_diff < -0.001:
-        direction = "a_better"
-    else:
-        direction = "equivalent"
-
     return {
-        "num_common_test_cases": len(common_test_cases),
-        "num_runs_a": len(summaries_a),
-        "num_runs_b": len(summaries_b),
+        "num_common_test_cases": comparison["num_common_cases"],
+        "num_runs_a": comparison["num_runs_a"],
+        "num_runs_b": comparison["num_runs_b"],
         "strategy": strategy,
         "metric_path": metric_path,
-        "mean_f1_a": round(float(np.mean([averaged_a[tc]["f1"] for tc in common_test_cases])), 4),
-        "mean_f1_b": round(float(np.mean([averaged_b[tc]["f1"] for tc in common_test_cases])), 4),
-        "mean_diff": round(mean_diff, 4),
-        "direction": direction,
-        "bootstrap_ci": {
-            "lower": round(bootstrap_ci_lower, 4),
-            "upper": round(bootstrap_ci_upper, 4),
-            "excludes_zero": not (bootstrap_ci_lower <= 0 <= bootstrap_ci_upper),
-        },
-        "wilcoxon": wilcoxon_result,
-        "significance": significance,
+        "mean_f1_a": comparison["mean_a"],
+        "mean_f1_b": comparison["mean_b"],
+        "mean_diff": comparison["mean_diff"],
+        "direction": comparison["direction"],
+        "bootstrap_ci": comparison["bootstrap_ci"],
+        "wilcoxon": comparison["wilcoxon"],
+        "significance": comparison["significance"],
         "paired_differences": paired_differences,
     }
