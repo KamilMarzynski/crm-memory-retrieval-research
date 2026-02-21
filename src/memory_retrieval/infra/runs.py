@@ -48,7 +48,7 @@ def _get_runs_dir(phase: str) -> Path:
 
 
 def _generate_run_id() -> str:
-    return f"{RUN_PREFIX}{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    return f"{RUN_PREFIX}{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
 
 
 def _load_run_metadata(run_dir: Path) -> dict[str, Any]:
