@@ -18,6 +18,7 @@ from retrieval_metrics.fingerprint import (
     fingerprint_diff as retrieval_fingerprint_diff,
 )
 
+from memory_retrieval.constants import DEFAULT_DISTANCE_THRESHOLD, DEFAULT_SEARCH_LIMIT
 from memory_retrieval.experiments.metrics import (
     find_optimal_threshold,
     macro_average,
@@ -31,7 +32,6 @@ from memory_retrieval.experiments.metrics_adapter import (
     build_per_case_metric_extractor,
     extract_metric_from_nested,
 )
-from memory_retrieval.experiments.runner import DEFAULT_DISTANCE_THRESHOLD, DEFAULT_SEARCH_LIMIT
 from memory_retrieval.infra.io import load_json, save_json
 
 RUN_SUMMARY_FILE = "run_summary.json"
@@ -90,72 +90,95 @@ def fingerprint_diff(
     return retrieval_fingerprint_diff(fingerprint_a, fingerprint_b)
 
 
-def reconstruct_fingerprint_from_run(run_dir: Path) -> dict[str, Any]:
-    """Reconstruct a config fingerprint from existing run data (backfill for old runs).
+def _load_run_metadata_safe(run_dir: Path) -> dict[str, Any]:
+    """Load run.json for a run directory, returning {} if not found or invalid."""
+    run_json_path = run_dir / "run.json"
+    if not run_json_path.exists():
+        return {}
+    try:
+        return load_json(run_json_path)
+    except Exception:
+        return {}
 
-    Reads run.json and result files to extract pipeline parameters.
+
+class FingerprintReconstructor:
+    """Reconstructs a config fingerprint from a completed run directory.
+
+    Handles legacy runs that may not have all fields in run.json,
+    falling back to scanning result files for pipeline parameters.
     """
-    run_metadata = load_json(run_dir / "run.json")
-    pipeline_status = run_metadata.get("pipeline_status", {})
 
-    # Extraction prompt version from pipeline_status or default
-    build_memories = pipeline_status.get("build_memories", {})
-    extraction_prompt_version = build_memories.get("prompt_version", "unknown")
+    def __init__(self, run_dir: Path) -> None:
+        self._run_dir = run_dir
 
-    # Query generation info: try pipeline_status first, then fall back to result files
-    query_generation_status = pipeline_status.get("query_generation", {})
-    query_model = query_generation_status.get("model", "")
-    query_prompt_version = query_generation_status.get("prompt_version", "")
+    def reconstruct(self) -> dict[str, Any]:
+        """Reconstruct and return the full config fingerprint for the run."""
+        run_metadata = _load_run_metadata_safe(self._run_dir)
+        pipeline_status = run_metadata.get("pipeline_status", {})
 
-    # Search/reranking info from result files
-    search_limit = DEFAULT_SEARCH_LIMIT
-    distance_threshold = DEFAULT_DISTANCE_THRESHOLD
-    reranker_model = None
-    rerank_text_strategies = None
+        extraction_prompt_version = pipeline_status.get("build_memories", {}).get(
+            "prompt_version", "unknown"
+        )
 
-    results_dir = run_dir / "results"
-    if results_dir.exists():
-        result_files = sorted(results_dir.glob("*.json"))
-        if result_files:
-            first_result = load_json(result_files[0])
+        query_generation_status = pipeline_status.get("query_generation", {})
+        query_model = query_generation_status.get("model", "")
+        query_prompt_version = query_generation_status.get("prompt_version", "")
 
-            # Try to get query info from result file if not in pipeline_status
-            if not query_model:
-                query_generation = first_result.get("query_generation", {})
-                query_model = query_generation.get("model", first_result.get("model", "unknown"))
-            if not query_prompt_version:
-                query_generation = first_result.get("query_generation", {})
-                query_prompt_version = query_generation.get(
-                    "prompt_version", first_result.get("prompt_version", "unknown")
+        search_limit = DEFAULT_SEARCH_LIMIT
+        distance_threshold = DEFAULT_DISTANCE_THRESHOLD
+        reranker_model = None
+        rerank_text_strategies = None
+
+        results_dir = self._run_dir / "results"
+        if results_dir.exists():
+            result_files = sorted(results_dir.glob("*.json"))
+            if result_files:
+                first_result = load_json(result_files[0])
+
+                if not query_model:
+                    query_generation = first_result.get("query_generation", {})
+                    query_model = query_generation.get(
+                        "model", first_result.get("model", "unknown")
+                    )
+                if not query_prompt_version:
+                    query_generation = first_result.get("query_generation", {})
+                    query_prompt_version = query_generation.get(
+                        "prompt_version", first_result.get("prompt_version", "unknown")
+                    )
+
+                search_limit = first_result.get("search_limit", DEFAULT_SEARCH_LIMIT)
+                distance_threshold = first_result.get(
+                    "distance_threshold", DEFAULT_DISTANCE_THRESHOLD
                 )
+                reranker_model = first_result.get("reranker_model")
 
-            search_limit = first_result.get("search_limit", 20)
-            distance_threshold = first_result.get("distance_threshold", 1.1)
-            reranker_model = first_result.get("reranker_model")
+                if "rerank_strategies" in first_result:
+                    rerank_text_strategies = list(first_result["rerank_strategies"].keys())
 
-            if "rerank_strategies" in first_result:
-                rerank_text_strategies = list(first_result["rerank_strategies"].keys())
+        # Normalize query prompt version: strip prefix if present (e.g., "memory-query/v3.0.0" -> "3.0.0")
+        if "/" in query_prompt_version:
+            version_part = query_prompt_version.split("/")[-1]
+            if version_part.startswith("v"):
+                query_prompt_version = version_part[1:]
 
-    # Normalize query prompt version: strip prefix if present (e.g., "memory-query/v3.0.0" -> "3.0.0")
-    if "/" in query_prompt_version:
-        version_part = query_prompt_version.split("/")[-1]
-        if version_part.startswith("v"):
-            query_prompt_version = version_part[1:]
+        embedding_model = run_metadata.get("embedding_model", "mxbai-embed-large")
 
-    # Read embedding_model from run.json if stored, fallback to default for old runs
-    embedding_model = run_metadata.get("embedding_model", "mxbai-embed-large")
+        return build_config_fingerprint(
+            extraction_prompt_version=extraction_prompt_version,
+            embedding_model=embedding_model,
+            search_backend="vector",
+            search_limit=search_limit,
+            distance_threshold=distance_threshold,
+            query_model=query_model,
+            query_prompt_version=query_prompt_version,
+            reranker_model=reranker_model,
+            rerank_text_strategies=rerank_text_strategies,
+        )
 
-    return build_config_fingerprint(
-        extraction_prompt_version=extraction_prompt_version,
-        embedding_model=embedding_model,
-        search_backend="vector",
-        search_limit=search_limit,
-        distance_threshold=distance_threshold,
-        query_model=query_model,
-        query_prompt_version=query_prompt_version,
-        reranker_model=reranker_model,
-        rerank_text_strategies=rerank_text_strategies,
-    )
+
+def reconstruct_fingerprint_from_run(run_dir: Path) -> dict[str, Any]:
+    """Reconstruct a config fingerprint from existing run data. See FingerprintReconstructor."""
+    return FingerprintReconstructor(run_dir).reconstruct()
 
 
 # ---------------------------------------------------------------------------
@@ -173,271 +196,345 @@ def _get_reranked_results_for_strategy(
     return result_data.get("reranked_results", [])
 
 
-def generate_run_summary(
-    run_dir: Path,
-    strategies: list[str] | None = None,
-    threshold_step: float = 0.005,
-    top_n_max: int = 20,
-    results_dir: str | None = None,
-) -> dict[str, Any]:
-    """Generate a run_summary.json from result files. Regenerable at any time.
+class RunSummaryGenerator:
+    """Generates and saves run_summary.json for a completed experiment run.
 
-    Produces a structured summary with fair baseline vs rerank comparison:
-    - ``baseline``: distance threshold sweep and top-N sweep for pre-rerank candidates
-    - ``rerank_strategies``: per-strategy threshold and top-N sweeps
-    - ``macro_averaged``: pre_rerank (overfetched + at-optimal) and post_rerank per strategy
-
-    Args:
-        run_dir: Path to the run or subrun directory (summary is saved here).
-        strategies: List of rerank strategy names to include. If None, auto-detected from results.
-        threshold_step: Step size for threshold sweep.
-        top_n_max: Maximum top-N value for sweep.
-        results_dir: Override for results directory (used for subruns).
+    Processes all result files in the run directory, computes macro-averaged
+    metrics, sweeps across distance thresholds and top-N values, and writes
+    the summary to run_summary.json.
     """
-    # Try run.json first (parent runs), fall back to subrun.json (subruns)
-    run_json_path = run_dir / "run.json"
-    subrun_json_path = run_dir / "subrun.json"
-    if run_json_path.exists():
-        run_metadata = load_json(run_json_path)
-        run_id = run_metadata.get("run_id", run_dir.name)
-    elif subrun_json_path.exists():
-        run_metadata = load_json(subrun_json_path)
-        run_id = run_metadata.get("subrun_id", run_dir.name)
-    else:
-        run_metadata = {}
-        run_id = run_dir.name
 
-    resolved_results_dir = Path(results_dir) if results_dir else run_dir / "results"
-    result_files = sorted(resolved_results_dir.glob("*.json"))
-    if not result_files:
-        raise FileNotFoundError(f"No result files found in {resolved_results_dir}")
+    def __init__(
+        self,
+        run_dir: Path,
+        strategies: list[str] | None = None,
+        threshold_step: float = 0.005,
+        top_n_max: int = 20,
+        results_dir: str | None = None,
+    ) -> None:
+        self._run_dir = run_dir
+        self._strategies = strategies
+        self._threshold_step = threshold_step
+        self._top_n_max = top_n_max
+        self._n_values = list(range(1, top_n_max + 1))
+        self._results_dir_override = results_dir
 
-    all_results = [load_json(file_path) for file_path in result_files]
-    successful_results = [
-        result for result in all_results if "pre_rerank_metrics" in result or "metrics" in result
-    ]
+    def generate(self) -> dict[str, Any]:
+        """Generate the run summary and save it to run_summary.json."""
+        run_id, run_metadata, successful_results, is_reranking, strategies = (
+            self._load_run_context()
+        )
 
-    is_reranking = "pre_rerank_metrics" in successful_results[0] if successful_results else False
+        per_test_case, all_pre_rerank_metrics, distance_experiments = (
+            self._process_per_test_case_metrics(
+                successful_results,
+                ground_truth_ids_map=None,
+                is_reranking=is_reranking,
+                strategies=strategies,
+            )
+        )
 
-    # Auto-detect strategies
-    if strategies is None and is_reranking:
-        first_result = successful_results[0]
-        if "rerank_strategies" in first_result:
-            strategies = list(first_result["rerank_strategies"].keys())
-        else:
-            strategies = ["default"]
-
-    per_test_case: dict[str, dict[str, Any]] = {}
-    all_pre_rerank_metrics: list[dict[str, float]] = []
-    n_values = list(range(1, top_n_max + 1))
-
-    # Collect distance-pooled experiments for global baseline sweeps
-    distance_experiments: list[dict[str, Any]] = []
-
-    # Collect per-test-case data
-    for result in successful_results:
-        test_case_id = result["test_case_id"]
-        ground_truth_ids = set(result.get("ground_truth", {}).get("memory_ids", []))
-        ground_truth_count = len(ground_truth_ids)
-        num_queries = len(result.get("queries", []))
-
-        test_case_entry: dict[str, Any] = {
-            "ground_truth_count": ground_truth_count,
-            "num_queries": num_queries,
+        summary: dict[str, Any] = {
+            "run_id": run_id,
+            "generated_at": datetime.now().isoformat(),
+            "num_test_cases": len(successful_results),
+            "per_test_case": per_test_case,
         }
 
+        macro: dict[str, Any] = {}
+
         if is_reranking:
-            pre_metrics = result["pre_rerank_metrics"]
-            pre_metrics_clean = {
-                key: pre_metrics[key] for key in ["precision", "recall", "f1"] if key in pre_metrics
-            }
-            # Pool by distance for pre-rerank analysis
-            pooled_by_distance = pool_and_deduplicate_by_distance(result.get("queries", []))
-            pre_mrr = reciprocal_rank(
-                [entry["id"] for entry in pooled_by_distance], ground_truth_ids
+            baseline = self._build_baseline_section(distance_experiments)
+            if baseline:
+                summary["baseline"] = baseline
+
+            rerank_strategies_section = self._build_rerank_strategies_section(
+                successful_results, strategies
             )
-            pre_metrics_clean["mrr"] = pre_mrr
-            all_pre_rerank_metrics.append(pre_metrics_clean)
+            summary["rerank_strategies"] = rerank_strategies_section
 
-            # Store distance-pooled experiment for global baseline sweeps
-            distance_experiments.append(
-                {
-                    "ground_truth_ids": ground_truth_ids,
-                    "ranked_results": pooled_by_distance,
-                }
+            macro = self._build_rerank_macro_section(
+                all_pre_rerank_metrics, summary.get("baseline", {}), rerank_strategies_section
             )
-
-            # Per-test-case pre-rerank: distance threshold sweep and top-N sweep
-            pre_rerank_entry: dict[str, Any] = {}
-
-            # Distance threshold sweep for this test case
-            if pooled_by_distance:
-                all_distances = [entry.get("distance", 0) for entry in pooled_by_distance]
-                max_distance = max(all_distances) if all_distances else 1.5
-                distance_thresholds = _build_threshold_range(0.0, max_distance, threshold_step)
-                tc_distance_sweep = sweep_threshold(
-                    [{"ground_truth_ids": ground_truth_ids, "ranked_results": pooled_by_distance}],
-                    distance_thresholds,
-                    score_field="distance",
-                    higher_is_better=False,
-                )
-                optimal_distance = find_optimal_threshold(tc_distance_sweep, metric="f1")
-                pre_rerank_entry["distance_threshold"] = {
-                    "optimal_threshold": round(optimal_distance.get("threshold", 0.0), 4),
-                    "at_optimal": {
-                        "precision": optimal_distance["precision"],
-                        "recall": optimal_distance["recall"],
-                        "f1": optimal_distance["f1"],
-                        "mrr": optimal_distance["mrr"],
-                    },
-                }
-
-            # Top-N sweep for this test case
-            if pooled_by_distance:
-                tc_top_n_sweep = sweep_top_n(
-                    [{"ground_truth_ids": ground_truth_ids, "ranked_results": pooled_by_distance}],
-                    n_values,
-                )
-                optimal_top_n = find_optimal_threshold(tc_top_n_sweep, metric="f1")
-                pre_rerank_entry["top_n"] = {
-                    "optimal_n": optimal_top_n.get("top_n", 1),
-                    "at_optimal": {
-                        "precision": optimal_top_n["precision"],
-                        "recall": optimal_top_n["recall"],
-                        "f1": optimal_top_n["f1"],
-                        "mrr": optimal_top_n["mrr"],
-                    },
-                }
-
-            test_case_entry["pre_rerank"] = pre_rerank_entry
-
-            # Per-strategy post-rerank: threshold sweep and top-N sweep
-            test_case_entry["post_rerank"] = {}
-            for strategy_name in strategies:
-                reranked = _get_reranked_results_for_strategy(result, strategy_name)
-                if not reranked:
-                    continue
-
-                strategy_entry: dict[str, Any] = {}
-
-                # Rerank threshold sweep
-                all_scores = [entry["rerank_score"] for entry in reranked]
-                if all_scores:
-                    max_score = max(all_scores)
-                    rerank_thresholds = _build_threshold_range(0.0, max_score, threshold_step)
-                    tc_rerank_sweep = sweep_threshold(
-                        [{"ground_truth_ids": ground_truth_ids, "ranked_results": reranked}],
-                        rerank_thresholds,
-                        score_field="rerank_score",
-                        higher_is_better=True,
-                    )
-                    optimal_rerank = find_optimal_threshold(tc_rerank_sweep, metric="f1")
-                    strategy_entry["rerank_threshold"] = {
-                        "optimal_threshold": round(optimal_rerank.get("threshold", 0.0), 4),
-                        "at_optimal": {
-                            "precision": optimal_rerank["precision"],
-                            "recall": optimal_rerank["recall"],
-                            "f1": optimal_rerank["f1"],
-                            "mrr": optimal_rerank["mrr"],
-                        },
-                    }
-
-                # Top-N sweep for reranked results
-                tc_rerank_top_n = sweep_top_n(
-                    [{"ground_truth_ids": ground_truth_ids, "ranked_results": reranked}],
-                    n_values,
-                )
-                optimal_rerank_top_n = find_optimal_threshold(tc_rerank_top_n, metric="f1")
-                strategy_entry["top_n"] = {
-                    "optimal_n": optimal_rerank_top_n.get("top_n", 1),
-                    "at_optimal": {
-                        "precision": optimal_rerank_top_n["precision"],
-                        "recall": optimal_rerank_top_n["recall"],
-                        "f1": optimal_rerank_top_n["f1"],
-                        "mrr": optimal_rerank_top_n["mrr"],
-                    },
-                }
-
-                test_case_entry["post_rerank"][strategy_name] = strategy_entry
         else:
-            # Standard (no reranking) metrics
-            metrics = result.get("metrics", {})
-            test_case_entry["metrics"] = {
-                key: metrics.get(key, 0.0) for key in ["precision", "recall", "f1"]
+            all_metrics = [
+                per_test_case[test_case_id]["metrics"]
+                for test_case_id in per_test_case
+                if "metrics" in per_test_case[test_case_id]
+            ]
+            macro["metrics"] = macro_average(all_metrics)
+
+        summary["macro_averaged"] = macro
+
+        save_json(summary, self._run_dir / RUN_SUMMARY_FILE)
+        return summary
+
+    def _load_run_context(
+        self,
+    ) -> tuple[str, dict[str, Any], list[dict[str, Any]], bool, list[str] | None]:
+        """Load run metadata and result files, detect reranking mode and strategies."""
+        run_json_path = self._run_dir / "run.json"
+        subrun_json_path = self._run_dir / "subrun.json"
+
+        if run_json_path.exists():
+            run_metadata = load_json(run_json_path)
+            run_id = run_metadata.get("run_id", self._run_dir.name)
+        elif subrun_json_path.exists():
+            run_metadata = load_json(subrun_json_path)
+            run_id = run_metadata.get("subrun_id", self._run_dir.name)
+        else:
+            run_metadata = {}
+            run_id = self._run_dir.name
+
+        resolved_results_dir = (
+            Path(self._results_dir_override)
+            if self._results_dir_override
+            else self._run_dir / "results"
+        )
+        result_files = sorted(resolved_results_dir.glob("*.json"))
+        if not result_files:
+            raise FileNotFoundError(f"No result files found in {resolved_results_dir}")
+
+        all_results = [load_json(file_path) for file_path in result_files]
+        successful_results = [
+            result
+            for result in all_results
+            if "pre_rerank_metrics" in result or "metrics" in result
+        ]
+
+        is_reranking = (
+            "pre_rerank_metrics" in successful_results[0] if successful_results else False
+        )
+
+        strategies = self._strategies
+        if strategies is None and is_reranking:
+            first_result = successful_results[0]
+            if "rerank_strategies" in first_result:
+                strategies = list(first_result["rerank_strategies"].keys())
+            else:
+                strategies = ["default"]
+
+        return run_id, run_metadata, successful_results, is_reranking, strategies
+
+    def _process_per_test_case_metrics(
+        self,
+        successful_results: list[dict[str, Any]],
+        ground_truth_ids_map: None,  # unused, kept for signature clarity
+        is_reranking: bool,
+        strategies: list[str] | None,
+    ) -> tuple[dict[str, Any], list[dict[str, float]], list[dict[str, Any]]]:
+        """Compute per-test-case metrics for all results.
+
+        Returns (per_test_case, all_pre_rerank_metrics, distance_experiments).
+        """
+        per_test_case: dict[str, dict[str, Any]] = {}
+        all_pre_rerank_metrics: list[dict[str, float]] = []
+        distance_experiments: list[dict[str, Any]] = []
+
+        for result in successful_results:
+            test_case_id = result["test_case_id"]
+            ground_truth_ids = set(result.get("ground_truth", {}).get("memory_ids", []))
+            ground_truth_count = len(ground_truth_ids)
+            num_queries = len(result.get("queries", []))
+
+            test_case_entry: dict[str, Any] = {
+                "ground_truth_count": ground_truth_count,
+                "num_queries": num_queries,
             }
 
-        per_test_case[test_case_id] = test_case_entry
+            if is_reranking:
+                test_case_entry, pre_metrics_clean, pooled_by_distance = (
+                    self._process_reranking_test_case(
+                        result, ground_truth_ids, test_case_entry, strategies or []
+                    )
+                )
+                all_pre_rerank_metrics.append(pre_metrics_clean)
+                distance_experiments.append(
+                    {
+                        "ground_truth_ids": ground_truth_ids,
+                        "ranked_results": pooled_by_distance,
+                    }
+                )
+            else:
+                metrics = result.get("metrics", {})
+                test_case_entry["metrics"] = {
+                    key: metrics.get(key, 0.0) for key in ["precision", "recall", "f1"]
+                }
 
-    # Build summary structure
-    summary: dict[str, Any] = {
-        "run_id": run_id,
-        "generated_at": datetime.now().isoformat(),
-        "num_test_cases": len(successful_results),
-        "per_test_case": per_test_case,
-    }
+            per_test_case[test_case_id] = test_case_entry
 
-    macro: dict[str, Any] = {}
+        return per_test_case, all_pre_rerank_metrics, distance_experiments
 
-    if is_reranking:
-        # --- Baseline section: distance-sorted candidate sweeps ---
-        if distance_experiments:
-            # Distance threshold sweep
-            all_max_distances = [
-                max(entry.get("distance", 0) for entry in experiment["ranked_results"])
-                for experiment in distance_experiments
-                if experiment["ranked_results"]
-            ]
-            distance_global_max = max(all_max_distances) if all_max_distances else 1.5
-            distance_thresholds = _build_threshold_range(0.0, distance_global_max, threshold_step)
-            baseline_threshold_sweep = sweep_threshold(
-                distance_experiments,
+    def _process_reranking_test_case(
+        self,
+        result: dict[str, Any],
+        ground_truth_ids: set[str],
+        test_case_entry: dict[str, Any],
+        strategies: list[str],
+    ) -> tuple[dict[str, Any], dict[str, float], list[dict[str, Any]]]:
+        """Process a single reranking test case, returning updated entry, pre-metrics, and pooled results."""
+        pre_metrics = result["pre_rerank_metrics"]
+        pre_metrics_clean = {
+            key: pre_metrics[key] for key in ["precision", "recall", "f1"] if key in pre_metrics
+        }
+
+        pooled_by_distance = pool_and_deduplicate_by_distance(result.get("queries", []))
+        pre_mrr = reciprocal_rank([entry["id"] for entry in pooled_by_distance], ground_truth_ids)
+        pre_metrics_clean["mrr"] = pre_mrr
+
+        pre_rerank_entry: dict[str, Any] = {}
+
+        if pooled_by_distance:
+            all_distances = [entry.get("distance", 0) for entry in pooled_by_distance]
+            max_distance = max(all_distances) if all_distances else 1.5
+            distance_thresholds = _build_threshold_range(0.0, max_distance, self._threshold_step)
+            tc_distance_sweep = sweep_threshold(
+                [{"ground_truth_ids": ground_truth_ids, "ranked_results": pooled_by_distance}],
                 distance_thresholds,
                 score_field="distance",
                 higher_is_better=False,
             )
-            optimal_distance_threshold = find_optimal_threshold(
-                baseline_threshold_sweep, metric="f1"
-            )
-
-            # Distance top-N sweep
-            baseline_top_n_sweep = sweep_top_n(distance_experiments, n_values)
-            optimal_distance_top_n = find_optimal_threshold(baseline_top_n_sweep, metric="f1")
-
-            summary["baseline"] = {
-                "note": "Pre-rerank metrics from distance-sorted candidates (overfetched for reranking)",
-                "distance_threshold_sweep": {
-                    "optimal_threshold": round(optimal_distance_threshold.get("threshold", 0.0), 4),
-                    "optimal_f1": round(optimal_distance_threshold["f1"], 4),
-                    "full_sweep": [
-                        {
-                            "threshold": round(entry["threshold"], 4),
-                            "precision": round(entry["precision"], 4),
-                            "recall": round(entry["recall"], 4),
-                            "f1": round(entry["f1"], 4),
-                            "mrr": round(entry["mrr"], 4),
-                        }
-                        for entry in baseline_threshold_sweep
-                    ],
-                },
-                "top_n_sweep": {
-                    "optimal_n": optimal_distance_top_n.get("top_n", 1),
-                    "optimal_f1": round(optimal_distance_top_n["f1"], 4),
-                    "full_sweep": [
-                        {
-                            "top_n": entry["top_n"],
-                            "precision": round(entry["precision"], 4),
-                            "recall": round(entry["recall"], 4),
-                            "f1": round(entry["f1"], 4),
-                            "mrr": round(entry["mrr"], 4),
-                        }
-                        for entry in baseline_top_n_sweep
-                    ],
+            optimal_distance = find_optimal_threshold(tc_distance_sweep, metric="f1")
+            pre_rerank_entry["distance_threshold"] = {
+                "optimal_threshold": round(optimal_distance.get("threshold", 0.0), 4),
+                "at_optimal": {
+                    "precision": optimal_distance["precision"],
+                    "recall": optimal_distance["recall"],
+                    "f1": optimal_distance["f1"],
+                    "mrr": optimal_distance["mrr"],
                 },
             }
 
-        # --- Rerank strategies section: per-strategy threshold + top-N sweeps ---
-        rerank_strategies_section: dict[str, Any] = {}
+            tc_top_n_sweep = sweep_top_n(
+                [{"ground_truth_ids": ground_truth_ids, "ranked_results": pooled_by_distance}],
+                self._n_values,
+            )
+            optimal_top_n = find_optimal_threshold(tc_top_n_sweep, metric="f1")
+            pre_rerank_entry["top_n"] = {
+                "optimal_n": optimal_top_n.get("top_n", 1),
+                "at_optimal": {
+                    "precision": optimal_top_n["precision"],
+                    "recall": optimal_top_n["recall"],
+                    "f1": optimal_top_n["f1"],
+                    "mrr": optimal_top_n["mrr"],
+                },
+            }
+
+        test_case_entry["pre_rerank"] = pre_rerank_entry
+
+        post_rerank_entry: dict[str, Any] = {}
         for strategy_name in strategies:
+            reranked = _get_reranked_results_for_strategy(result, strategy_name)
+            if not reranked:
+                continue
+
+            strategy_entry: dict[str, Any] = {}
+
+            all_scores = [entry["rerank_score"] for entry in reranked]
+            if all_scores:
+                max_score = max(all_scores)
+                rerank_thresholds = _build_threshold_range(0.0, max_score, self._threshold_step)
+                tc_rerank_sweep = sweep_threshold(
+                    [{"ground_truth_ids": ground_truth_ids, "ranked_results": reranked}],
+                    rerank_thresholds,
+                    score_field="rerank_score",
+                    higher_is_better=True,
+                )
+                optimal_rerank = find_optimal_threshold(tc_rerank_sweep, metric="f1")
+                strategy_entry["rerank_threshold"] = {
+                    "optimal_threshold": round(optimal_rerank.get("threshold", 0.0), 4),
+                    "at_optimal": {
+                        "precision": optimal_rerank["precision"],
+                        "recall": optimal_rerank["recall"],
+                        "f1": optimal_rerank["f1"],
+                        "mrr": optimal_rerank["mrr"],
+                    },
+                }
+
+            tc_rerank_top_n = sweep_top_n(
+                [{"ground_truth_ids": ground_truth_ids, "ranked_results": reranked}],
+                self._n_values,
+            )
+            optimal_rerank_top_n = find_optimal_threshold(tc_rerank_top_n, metric="f1")
+            strategy_entry["top_n"] = {
+                "optimal_n": optimal_rerank_top_n.get("top_n", 1),
+                "at_optimal": {
+                    "precision": optimal_rerank_top_n["precision"],
+                    "recall": optimal_rerank_top_n["recall"],
+                    "f1": optimal_rerank_top_n["f1"],
+                    "mrr": optimal_rerank_top_n["mrr"],
+                },
+            }
+
+            post_rerank_entry[strategy_name] = strategy_entry
+
+        test_case_entry["post_rerank"] = post_rerank_entry
+        return test_case_entry, pre_metrics_clean, pooled_by_distance
+
+    def _build_baseline_section(self, distance_experiments: list[dict[str, Any]]) -> dict[str, Any]:
+        """Build the baseline distance-threshold and top-N sweep section."""
+        if not distance_experiments:
+            return {}
+
+        all_max_distances = [
+            max(entry.get("distance", 0) for entry in experiment["ranked_results"])
+            for experiment in distance_experiments
+            if experiment["ranked_results"]
+        ]
+        distance_global_max = max(all_max_distances) if all_max_distances else 1.5
+        distance_thresholds = _build_threshold_range(0.0, distance_global_max, self._threshold_step)
+
+        baseline_threshold_sweep = sweep_threshold(
+            distance_experiments,
+            distance_thresholds,
+            score_field="distance",
+            higher_is_better=False,
+        )
+        optimal_distance_threshold = find_optimal_threshold(baseline_threshold_sweep, metric="f1")
+
+        baseline_top_n_sweep = sweep_top_n(distance_experiments, self._n_values)
+        optimal_distance_top_n = find_optimal_threshold(baseline_top_n_sweep, metric="f1")
+
+        return {
+            "note": "Pre-rerank metrics from distance-sorted candidates (overfetched for reranking)",
+            "distance_threshold_sweep": {
+                "optimal_threshold": round(optimal_distance_threshold.get("threshold", 0.0), 4),
+                "optimal_f1": round(optimal_distance_threshold["f1"], 4),
+                "full_sweep": [
+                    {
+                        "threshold": round(entry["threshold"], 4),
+                        "precision": round(entry["precision"], 4),
+                        "recall": round(entry["recall"], 4),
+                        "f1": round(entry["f1"], 4),
+                        "mrr": round(entry["mrr"], 4),
+                    }
+                    for entry in baseline_threshold_sweep
+                ],
+            },
+            "top_n_sweep": {
+                "optimal_n": optimal_distance_top_n.get("top_n", 1),
+                "optimal_f1": round(optimal_distance_top_n["f1"], 4),
+                "full_sweep": [
+                    {
+                        "top_n": entry["top_n"],
+                        "precision": round(entry["precision"], 4),
+                        "recall": round(entry["recall"], 4),
+                        "f1": round(entry["f1"], 4),
+                        "mrr": round(entry["mrr"], 4),
+                    }
+                    for entry in baseline_top_n_sweep
+                ],
+            },
+        }
+
+    def _build_rerank_strategies_section(
+        self,
+        successful_results: list[dict[str, Any]],
+        strategies: list[str] | None,
+    ) -> dict[str, Any]:
+        """Build the per-strategy threshold and top-N sweep section."""
+        rerank_strategies_section: dict[str, Any] = {}
+        for strategy_name in strategies or []:
             experiments_for_sweep = []
             for result in successful_results:
                 ground_truth_ids = set(result.get("ground_truth", {}).get("memory_ids", []))
@@ -453,14 +550,14 @@ def generate_run_summary(
             if not experiments_for_sweep:
                 continue
 
-            # Threshold sweep
             all_max_scores = [
                 max(entry["rerank_score"] for entry in experiment["ranked_results"])
                 for experiment in experiments_for_sweep
                 if experiment["ranked_results"]
             ]
             global_max = max(all_max_scores) if all_max_scores else 1.0
-            rerank_thresholds = _build_threshold_range(0.0, global_max, threshold_step)
+            rerank_thresholds = _build_threshold_range(0.0, global_max, self._threshold_step)
+
             threshold_sweep_results = sweep_threshold(
                 experiments_for_sweep,
                 rerank_thresholds,
@@ -469,8 +566,7 @@ def generate_run_summary(
             )
             optimal_threshold = find_optimal_threshold(threshold_sweep_results, metric="f1")
 
-            # Top-N sweep
-            top_n_sweep_results = sweep_top_n(experiments_for_sweep, n_values)
+            top_n_sweep_results = sweep_top_n(experiments_for_sweep, self._n_values)
             optimal_n_entry = find_optimal_threshold(top_n_sweep_results, metric="f1")
 
             rerank_strategies_section[strategy_name] = {
@@ -504,17 +600,20 @@ def generate_run_summary(
                 },
             }
 
-        summary["rerank_strategies"] = rerank_strategies_section
+        return rerank_strategies_section
 
-        # --- Macro-averaged section ---
+    def _build_rerank_macro_section(
+        self,
+        all_pre_rerank_metrics: list[dict[str, float]],
+        baseline: dict[str, Any],
+        rerank_strategies_section: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Compute macro-averaged metrics for reranking runs."""
+        macro: dict[str, Any] = {}
+
         overfetched_macro = macro_average(all_pre_rerank_metrics)
+        pre_rerank_macro: dict[str, Any] = {"overfetched": overfetched_macro}
 
-        pre_rerank_macro: dict[str, Any] = {
-            "overfetched": overfetched_macro,
-        }
-
-        # Add at-optimal distance threshold and top-N from baseline sweeps
-        baseline = summary.get("baseline", {})
         distance_sweep_data = baseline.get("distance_threshold_sweep", {})
         if distance_sweep_data:
             pre_rerank_macro["at_optimal_distance_threshold"] = {
@@ -579,7 +678,6 @@ def generate_run_summary(
 
         macro["pre_rerank"] = pre_rerank_macro
 
-        # Post-rerank per strategy from rerank_strategies section
         post_rerank_macro: dict[str, Any] = {}
         for strategy_name, strategy_data in rerank_strategies_section.items():
             threshold_data = strategy_data["threshold_sweep"]
@@ -614,21 +712,32 @@ def generate_run_summary(
             }
 
         macro["post_rerank"] = post_rerank_macro
-    else:
-        # Standard metrics macro-average
-        all_metrics = [
-            per_test_case[test_case_id]["metrics"]
-            for test_case_id in per_test_case
-            if "metrics" in per_test_case[test_case_id]
-        ]
-        macro["metrics"] = macro_average(all_metrics)
+        return macro
 
-    summary["macro_averaged"] = macro
 
-    # Save
-    summary_path = run_dir / RUN_SUMMARY_FILE
-    save_json(summary, summary_path)
-    return summary
+def generate_run_summary(
+    run_dir: Path,
+    strategies: list[str] | None = None,
+    threshold_step: float = 0.005,
+    top_n_max: int = 20,
+    results_dir: str | None = None,
+) -> dict[str, Any]:
+    """Generate a run_summary.json from result files. Regenerable at any time.
+
+    Produces a structured summary with fair baseline vs rerank comparison:
+    - ``baseline``: distance threshold sweep and top-N sweep for pre-rerank candidates
+    - ``rerank_strategies``: per-strategy threshold and top-N sweeps
+    - ``macro_averaged``: pre_rerank (overfetched + at-optimal) and post_rerank per strategy
+
+    See RunSummaryGenerator for implementation.
+    """
+    return RunSummaryGenerator(
+        run_dir=run_dir,
+        strategies=strategies,
+        threshold_step=threshold_step,
+        top_n_max=top_n_max,
+        results_dir=results_dir,
+    ).generate()
 
 
 def _build_threshold_range(min_value: float, max_value: float, step: float) -> list[float]:
