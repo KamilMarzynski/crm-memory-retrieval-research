@@ -259,6 +259,113 @@ def _print_experiment_summary(
         print(f"Failed experiments: {len(all_results) - len(successful)}")
 
 
+def _build_reranking_fields(
+    query_results: list[dict[str, Any]],
+    ground_truth_ids: set[str],
+    queries: list[str],
+    config: ExperimentConfig,
+) -> dict[str, Any]:
+    """Run reranking for all configured strategies and return result fields.
+
+    Called when config.reranker is not None. Each strategy's results are pooled
+    and deduplicated. The primary (first) strategy populates top-level keys;
+    additional strategies are stored under rerank_strategies.
+    """
+    extra: dict[str, Any] = {
+        "distance_threshold": config.distance_threshold,
+        "reranker_model": config.reranker.model_name,  # type: ignore[union-attr]
+        "pre_rerank_metrics": _compute_pre_rerank_metrics(
+            query_results, ground_truth_ids, config.distance_threshold
+        ),
+        "rerank_queries": queries,
+    }
+
+    strategies = config.rerank_text_strategies or {"default": None}
+    strategies_results: dict[str, dict[str, Any]] = {}
+
+    for strategy_name, text_fn in strategies.items():
+        strategies_results[strategy_name] = _run_rerank_strategy(
+            config.reranker,  # type: ignore[arg-type]
+            query_results,
+            ground_truth_ids,
+            text_fn=text_fn,
+            text_field="situation",
+        )
+
+    # Primary strategy (first one) populates top-level keys
+    primary_name = next(iter(strategies))
+    primary = strategies_results[primary_name]
+    extra["reranked_results"] = primary["reranked_results"]
+    extra["per_query_reranked"] = primary["per_query_reranked"]
+
+    if len(strategies) > 1:
+        extra["rerank_strategies"] = {
+            name: {key: value for key, value in strategy.items() if key != "pooled_count"}
+            for name, strategy in strategies_results.items()
+        }
+
+    return extra
+
+
+def _build_standard_fields(
+    query_results: list[dict[str, Any]],
+    ground_truth_ids: set[str],
+    queries: list[str],
+    all_retrieved_ids: set[str],
+    config: ExperimentConfig,
+) -> dict[str, Any]:
+    """Compute metrics for the standard (no reranking) retrieval path.
+
+    Uses distance-based filtering for vector results; falls back to all
+    retrieved IDs when results contain no distance scores (FTS5).
+    """
+    # Vector results have a "distance" key; FTS5 results have a "rank" key.
+    # Use distance-based filtering only when results contain distance scores.
+    uses_distance_filtering = any(
+        "distance" in entry for query_result in query_results for entry in query_result["results"]
+    )
+
+    if uses_distance_filtering:
+        filtered_retrieved_ids: set[str] = {
+            entry["id"]
+            for query_result in query_results
+            for entry in query_result["results"]
+            if entry.get("distance", 0) <= config.distance_threshold
+        }
+    else:
+        filtered_retrieved_ids = all_retrieved_ids
+
+    metrics = metric_point_to_dict(compute_set_metrics(filtered_retrieved_ids, ground_truth_ids))
+
+    query_analysis = analyze_query_diagnostics(
+        query_results,
+        relevance_key="is_ground_truth",
+        score_key="distance",
+    )
+    for query_entry in query_analysis.get("best_queries", []):
+        query_entry["avg_distance"] = query_entry.pop("avg_score", None)
+        query_entry["min_distance"] = query_entry.pop("min_score", None)
+    for query_entry in query_analysis.get("worst_queries", []):
+        query_entry["avg_distance"] = query_entry.pop("avg_score", None)
+        query_entry["min_distance"] = query_entry.pop("min_score", None)
+
+    return {
+        "distance_threshold": config.distance_threshold,
+        "metrics": {
+            "total_queries": len(queries),
+            "total_unique_retrieved": len(all_retrieved_ids),
+            "total_within_threshold": len(filtered_retrieved_ids),
+            "ground_truth_retrieved": len(filtered_retrieved_ids & ground_truth_ids),
+            "precision": metrics["precision"],
+            "recall": metrics["recall"],
+            "f1": metrics["f1"],
+        },
+        "query_analysis": query_analysis,
+        "retrieved_ground_truth_ids": sorted(list(filtered_retrieved_ids & ground_truth_ids)),
+        "missed_ground_truth_ids": sorted(list(ground_truth_ids - filtered_retrieved_ids)),
+    }
+
+
 def run_experiment(
     test_case_path: str,
     query_file_path: str,
@@ -275,14 +382,12 @@ def run_experiment(
     query_data = load_json(query_file_path)
     meta = test_case.get("metadata", {})
     ground_truth_ids = set(test_case.get("ground_truth_memory_ids", []))
-    diff_stats = test_case.get("diff_stats", {})
 
     queries = query_data.get("queries", [])
     test_case_id = test_case.get("test_case_id", "unknown")
 
     query_results, all_retrieved_ids = _execute_queries(queries, db_path, config, ground_truth_ids)
 
-    # --- Build result structure ---
     result: dict[str, Any] = {
         "experiment_id": f"exp_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
         "test_case_id": test_case_id,
@@ -294,7 +399,7 @@ def run_experiment(
             "generated_at": query_data.get("generated_at", "unknown"),
         },
         "search_limit": config.search_limit,
-        "diff_stats": diff_stats,
+        "diff_stats": test_case.get("diff_stats", {}),
         "ground_truth": {
             "memory_ids": sorted(list(ground_truth_ids)),
             "count": len(ground_truth_ids),
@@ -306,93 +411,13 @@ def run_experiment(
         result["sample_memories_used"] = query_data["sample_memories_used"]
 
     if config.reranker is not None:
-        # --- Reranking path ---
-        result["distance_threshold"] = config.distance_threshold
-        result["reranker_model"] = config.reranker.model_name
-
-        result["pre_rerank_metrics"] = _compute_pre_rerank_metrics(
-            query_results, ground_truth_ids, config.distance_threshold
-        )
-
-        # Per-query reranking with strategy support
-        strategies = config.rerank_text_strategies or {"default": None}
-
-        result["rerank_queries"] = queries
-        strategies_results: dict[str, dict[str, Any]] = {}
-
-        for strategy_name, text_fn in strategies.items():
-            strategy = _run_rerank_strategy(
-                config.reranker,
-                query_results,
-                ground_truth_ids,
-                text_fn=text_fn,
-                text_field="situation",
-            )
-            strategies_results[strategy_name] = strategy
-
-        # Primary strategy (first one) populates top-level keys
-        primary_name = next(iter(strategies))
-        primary = strategies_results[primary_name]
-        result["reranked_results"] = primary["reranked_results"]
-        result["per_query_reranked"] = primary["per_query_reranked"]
-
-        if len(strategies) > 1:
-            result["rerank_strategies"] = {
-                name: {k: v for k, v in strategy.items() if k != "pooled_count"}
-                for name, strategy in strategies_results.items()
-            }
-
+        result.update(_build_reranking_fields(query_results, ground_truth_ids, queries, config))
     else:
-        # --- Standard (no reranking) path ---
-        result["distance_threshold"] = config.distance_threshold
-
-        # Vector results have a "distance" key; FTS5 results have a "rank" key.
-        # Use distance-based filtering only when results contain distance scores.
-        uses_distance_filtering = any(
-            "distance" in entry
-            for query_result in query_results
-            for entry in query_result["results"]
+        result.update(
+            _build_standard_fields(
+                query_results, ground_truth_ids, queries, all_retrieved_ids, config
+            )
         )
-
-        if uses_distance_filtering:
-            filtered_retrieved_ids: set[str] = {
-                entry["id"]
-                for query_result in query_results
-                for entry in query_result["results"]
-                if entry.get("distance", 0) <= config.distance_threshold
-            }
-        else:
-            filtered_retrieved_ids = all_retrieved_ids
-
-        metrics = metric_point_to_dict(
-            compute_set_metrics(filtered_retrieved_ids, ground_truth_ids)
-        )
-        query_analysis = analyze_query_diagnostics(
-            query_results,
-            relevance_key="is_ground_truth",
-            score_key="distance",
-        )
-        for query_entry in query_analysis.get("best_queries", []):
-            query_entry["avg_distance"] = query_entry.pop("avg_score", None)
-            query_entry["min_distance"] = query_entry.pop("min_score", None)
-        for query_entry in query_analysis.get("worst_queries", []):
-            query_entry["avg_distance"] = query_entry.pop("avg_score", None)
-            query_entry["min_distance"] = query_entry.pop("min_score", None)
-
-        result["metrics"] = {
-            "total_queries": len(queries),
-            "total_unique_retrieved": len(all_retrieved_ids),
-            "total_within_threshold": len(filtered_retrieved_ids),
-            "ground_truth_retrieved": len(filtered_retrieved_ids & ground_truth_ids),
-            "precision": metrics["precision"],
-            "recall": metrics["recall"],
-            "f1": metrics["f1"],
-        }
-        result["query_analysis"] = query_analysis
-        result["retrieved_ground_truth_ids"] = sorted(
-            list(filtered_retrieved_ids & ground_truth_ids)
-        )
-        result["missed_ground_truth_ids"] = sorted(list(ground_truth_ids - filtered_retrieved_ids))
 
     # Save results
     Path(results_dir).mkdir(parents=True, exist_ok=True)
