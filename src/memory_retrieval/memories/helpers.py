@@ -31,3 +31,19 @@ def stable_id(raw_comment_id: str, situation: str, lesson: str) -> str:
         (raw_comment_id + "\n" + situation + "\n" + lesson).encode("utf-8")
     ).hexdigest()
     return f"mem_{hash_object[:12]}"
+
+
+def get_confidence_from_distance(distance: float) -> str:
+    """Map a cosine distance to a human-readable confidence label.
+
+    Used to annotate vector search results with an interpretable confidence level.
+    Lower distance = closer match = higher confidence.
+    """
+    if distance < 0.5:
+        return "high"
+    elif distance < 0.8:
+        return "medium"
+    elif distance < 1.2:
+        return "low"
+    else:
+        return "very_low"

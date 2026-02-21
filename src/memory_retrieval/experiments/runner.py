@@ -11,9 +11,10 @@ from memory_retrieval.experiments.metrics import pool_and_deduplicate_by_rerank_
 from memory_retrieval.experiments.metrics_adapter import metric_point_to_dict
 from memory_retrieval.infra.io import load_json, save_json
 from memory_retrieval.memories.schema import FIELD_DISTANCE, FIELD_RERANK_SCORE, FIELD_SITUATION
+from memory_retrieval.memories.helpers import get_confidence_from_distance
 from memory_retrieval.search.base import SearchBackend
 from memory_retrieval.search.reranker import Reranker
-from memory_retrieval.search.vector import VectorBackend, get_confidence_from_distance
+from memory_retrieval.search.vector import VectorBackend
 
 DEFAULT_SEARCH_LIMIT = 20
 DEFAULT_DISTANCE_THRESHOLD = 1.1

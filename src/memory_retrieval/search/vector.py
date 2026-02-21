@@ -58,17 +58,6 @@ def get_db_connection(db_path: str) -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
-def get_confidence_from_distance(distance: float) -> str:
-    if distance < 0.5:
-        return "high"
-    elif distance < 0.8:
-        return "medium"
-    elif distance < 1.2:
-        return "low"
-    else:
-        return "very_low"
-
-
 class VectorBackend:
     """Vector search backend using sqlite-vec for embedding-based retrieval.
 
