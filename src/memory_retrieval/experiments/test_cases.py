@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from memory_retrieval.constants import EXCLUDED_FILE_PATTERNS
 from memory_retrieval.infra.io import load_json, save_json
 from memory_retrieval.memories.loader import load_memories
 
@@ -17,23 +18,6 @@ FIELD_GROUND_TRUTH_IDS = "ground_truth_memory_ids"
 FIELD_GROUND_TRUTH_COUNT = "ground_truth_count"
 
 TEST_CASE_ID_PREFIX = "tc_"
-
-EXCLUDED_FILE_PATTERNS = [
-    r"package-lock\.json$",
-    r"yarn\.lock$",
-    r"pnpm-lock\.yaml$",
-    r"\.snap$",
-    r"__snapshots__/",
-    r"\.min\.js$",
-    r"\.min\.css$",
-    r"\.map$",
-    r"\.d\.ts$",
-    r"dist/",
-    r"build/",
-    r"node_modules/",
-    r"\.generated\.",
-    r"migrations/\d+",
-]
 
 
 def filter_diff(full_diff: str) -> str:
@@ -61,7 +45,7 @@ def filter_diff(full_diff: str) -> str:
             if match:
                 current_file = match.group(1)
                 skip_until_next_file = any(
-                    re.search(pattern, current_file) for pattern in EXCLUDED_FILE_PATTERNS
+                    pattern.search(current_file) for pattern in EXCLUDED_FILE_PATTERNS
                 )
 
             if not skip_until_next_file:
