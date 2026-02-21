@@ -78,7 +78,7 @@ def _get_random_sample_memories(
 ) -> list[dict[str, Any]]:
     """Get sample memories if the backend supports it."""
     if isinstance(backend, VectorBackend):
-        return backend.get_random_sample_memories(db_path, n=num_samples)
+        return backend.get_random_sample_memories(db_path, num_samples=num_samples)
     return []
 
 

@@ -1,12 +1,14 @@
 import sqlite3
 import struct
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
+from itertools import batched
 from typing import Any
 
 import ollama
 import sqlite_vec
 
+from memory_retrieval.constants import EMBEDDING_MODEL_DIMENSIONS
 from memory_retrieval.memories.loader import load_memories
 from memory_retrieval.memories.schema import (
     FIELD_DISTANCE,
@@ -16,22 +18,12 @@ from memory_retrieval.memories.schema import (
     FIELD_SITUATION,
     FIELD_SOURCE,
 )
-from memory_retrieval.search.base import SearchResult
+from memory_retrieval.search.base import SearchBackendBase, SearchResult
 from memory_retrieval.search.db_utils import deserialize_json_field, serialize_json_field
 
 DEFAULT_EMBEDDING_MODEL = "mxbai-embed-large"
 DEFAULT_VECTOR_DIMENSIONS = 1024
 DEFAULT_EMBEDDING_CHUNK_SIZE = 100
-
-# Known model → dimension mapping for automatic configuration
-EMBEDDING_MODEL_DIMENSIONS: dict[str, int] = {
-    "mxbai-embed-large": 1024,
-    "nomic-embed-text": 768,
-    "all-minilm": 384,
-    "snowflake-arctic-embed": 1024,
-    "bge-large": 1024,
-    "bge-m3": 1024,
-}
 
 
 def _serialize_f32(vector: list[float]) -> bytes:
@@ -58,7 +50,7 @@ def get_db_connection(db_path: str) -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
-class VectorBackend:
+class VectorBackend(SearchBackendBase):
     """Vector search backend using sqlite-vec for embedding-based retrieval.
 
     Args:
@@ -83,6 +75,10 @@ class VectorBackend:
             ollama.Client(host=ollama_host) if ollama_host else None
         )
 
+    def _get_db_connection(self, db_path: str) -> AbstractContextManager[sqlite3.Connection]:
+        """Return a context manager for a sqlite-vec-enabled SQLite connection."""
+        return get_db_connection(db_path)
+
     def _get_embedding(self, text: str) -> list[float]:
         """Generate embedding for a single text using this backend's configured model."""
         client = self._ollama_client or ollama
@@ -97,7 +93,7 @@ class VectorBackend:
         Sends texts to Ollama in chunks, reducing HTTP round-trips from N to ceil(N/chunk_size).
         """
         client = self._ollama_client or ollama
-        chunks = [texts[i : i + chunk_size] for i in range(0, len(texts), chunk_size)]
+        chunks = [list(chunk) for chunk in batched(texts, chunk_size)]
         all_embeddings: list[list[float]] = []
 
         for chunk_index, chunk in enumerate(chunks):
@@ -279,76 +275,14 @@ class VectorBackend:
             cursor.execute("SELECT COUNT(*) FROM memories")
             return cursor.fetchone()[0]
 
-    def get_memory_by_id(self, db_path: str, memory_id: str) -> dict[str, Any] | None:
-        """Retrieve a specific memory by its ID.
-
-        Args:
-            db_path: Path to the SQLite database file.
-            memory_id: The unique memory identifier.
-
-        Returns:
-            Memory dictionary with all fields, or None if not found.
-        """
-        with get_db_connection(db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute(
-                f"""
-                SELECT {FIELD_ID}, {FIELD_SITUATION}, {FIELD_LESSON},
-                       {FIELD_METADATA}, {FIELD_SOURCE}
-                FROM memories WHERE {FIELD_ID} = ?
-                """,
-                (memory_id,),
-            )
-            row = cursor.fetchone()
-            if row is None:
-                return None
-            return {
-                FIELD_ID: row[FIELD_ID],
-                FIELD_SITUATION: row[FIELD_SITUATION],
-                FIELD_LESSON: row[FIELD_LESSON],
-                FIELD_METADATA: deserialize_json_field(row[FIELD_METADATA]),
-                FIELD_SOURCE: deserialize_json_field(row[FIELD_SOURCE]),
-            }
-
-    def get_sample_memories(self, db_path: str, limit: int = 5) -> list[dict[str, Any]]:
-        """Get the first N memories from the database (not randomized).
-
-        Args:
-            db_path: Path to the SQLite database file.
-            limit: Maximum number of memories to return.
-
-        Returns:
-            List of memory dictionaries.
-        """
-        with get_db_connection(db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute(
-                f"""
-                SELECT {FIELD_ID}, {FIELD_SITUATION}, {FIELD_LESSON},
-                       {FIELD_METADATA}, {FIELD_SOURCE}
-                FROM memories LIMIT ?
-                """,
-                (limit,),
-            )
-            return [
-                {
-                    FIELD_ID: row[FIELD_ID],
-                    FIELD_SITUATION: row[FIELD_SITUATION],
-                    FIELD_LESSON: row[FIELD_LESSON],
-                    FIELD_METADATA: deserialize_json_field(row[FIELD_METADATA]),
-                    FIELD_SOURCE: deserialize_json_field(row[FIELD_SOURCE]),
-                }
-                for row in cursor.fetchall()
-            ]
-
-    def get_random_sample_memories(self, db_path: str, n: int = 5) -> list[dict[str, Any]]:
+    def get_random_sample_memories(
+        self, db_path: str, num_samples: int = 5
+    ) -> list[dict[str, Any]]:
         """Get N random memories from the database for use in prompt examples.
 
         Args:
             db_path: Path to the SQLite database file.
-            n: Number of random memories to return.
+            num_samples: Number of random memories to return.
 
         Returns:
             List of memory dictionaries (id, situation, lesson only).
@@ -361,7 +295,7 @@ class VectorBackend:
                 SELECT {FIELD_ID}, {FIELD_SITUATION}, {FIELD_LESSON}
                 FROM memories ORDER BY RANDOM() LIMIT ?
                 """,
-                (n,),
+                (num_samples,),
             )
             return [
                 {
