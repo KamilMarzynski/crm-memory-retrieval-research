@@ -1,10 +1,11 @@
 import json
 from pathlib import Path
+from typing import Any
 
 from memory_retrieval.memories.loader import load_memories
 
 
-def _write_jsonl(path: Path, records: list[dict]) -> None:
+def _write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
     with open(path, "w", encoding="utf-8") as f:
         for record in records:
             f.write(json.dumps(record) + "\n")
@@ -22,7 +23,7 @@ def test_load_memories_single_valid_file_loads_all_records(tmp_path: Path) -> No
     )
     memories = load_memories(tmp_path)
     assert len(memories) == 2
-    assert memories[0]["id"] == "mem_aaa"
+    assert {memory["id"] for memory in memories} == {"mem_aaa", "mem_bbb"}
 
 
 def test_load_memories_multiple_files_loads_all(tmp_path: Path) -> None:

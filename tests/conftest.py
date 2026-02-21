@@ -1,9 +1,4 @@
-from pathlib import Path
 from typing import Any
-
-import pytest
-
-from memory_retrieval.search.fts5 import FTS5Backend
 
 
 def sample_memory(
@@ -21,27 +16,3 @@ def sample_memory(
         "metadata": {"repo": "test-repo", "language": "py"},
         "source": {"file": "main.py"},
     }
-
-
-@pytest.fixture
-def tmp_fts5_db(tmp_path: Path) -> str:
-    """Create a temporary FTS5 database with two sample memories pre-inserted."""
-    db_path = str(tmp_path / "memories.db")
-    backend = FTS5Backend()
-    backend.create_database(db_path)
-    backend.insert_memories(
-        db_path,
-        [
-            sample_memory(
-                "mem_001",
-                ["Python code has type errors when types are wrong."],
-                "Type check everything.",
-            ),
-            sample_memory(
-                "mem_002",
-                ["Code review missing without proper test coverage."],
-                "Write tests first.",
-            ),
-        ],
-    )
-    return db_path

@@ -67,11 +67,10 @@ def test_get_latest_run_returns_run_dir_path(isolated_data_dir: Path) -> None:
 
 
 def test_get_latest_run_returns_newest_when_multiple_exist(isolated_data_dir: Path) -> None:
-    run_id_a, _ = create_run("phase1")
-    run_id_b, run_dir_b = create_run("phase1")
+    create_run("phase1")
+    _, newer_run_dir = create_run("phase1")
     latest = get_latest_run("phase1")
-    # The latest should be the one with the lexicographically largest name (newest timestamp)
-    assert latest.name >= run_id_a
+    assert latest == newer_run_dir
 
 
 def test_get_latest_run_raises_when_no_runs_exist(isolated_data_dir: Path) -> None:
