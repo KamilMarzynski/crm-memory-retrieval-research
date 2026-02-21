@@ -7,18 +7,9 @@ from retrieval_metrics.compute import (
     compute_threshold_metrics,
     compute_top_n_metrics,
 )
-from retrieval_metrics.compute import (
-    reciprocal_rank as retrieval_reciprocal_rank,
-)
 from retrieval_metrics.diagnostics import analyze_query_diagnostics
-from retrieval_metrics.sweeps import find_optimal_entry
 
-from memory_retrieval.experiments.metrics_adapter import (
-    macro_average_from_metric_dicts,
-    restriction_evaluation_to_dict,
-    threshold_sweep_from_experiments,
-    top_n_sweep_from_experiments,
-)
+from memory_retrieval.experiments.metrics_adapter import restriction_evaluation_to_dict
 from memory_retrieval.memories.schema import FIELD_RERANK_SCORE
 
 
@@ -96,11 +87,6 @@ def pool_and_deduplicate_by_rerank_score(
     )
 
 
-def reciprocal_rank(ranked_ids: list[str], ground_truth_ids: set[str]) -> float:
-    """Return 1/rank of the first ground truth hit in a ranked list, or 0 if none found."""
-    return retrieval_reciprocal_rank(ranked_ids, ground_truth_ids)
-
-
 def compute_metrics_at_top_n(
     ranked_results: list[dict[str, Any]],
     ground_truth_ids: set[str],
@@ -130,42 +116,3 @@ def compute_metrics_at_threshold(
         id_key=id_field,
     )
     return restriction_evaluation_to_dict(evaluation, include_accepted_count=True)
-
-
-def sweep_top_n(
-    experiments: list[dict[str, Any]],
-    n_values: list[int],
-    id_field: str = "id",
-) -> list[dict[str, Any]]:
-    """Macro-averaged P/R/F1/MRR sweep across top-N values."""
-    return top_n_sweep_from_experiments(experiments, n_values, id_field=id_field)
-
-
-def sweep_threshold(
-    experiments: list[dict[str, Any]],
-    thresholds: list[float],
-    score_field: str,
-    higher_is_better: bool,
-    id_field: str = "id",
-) -> list[dict[str, Any]]:
-    """Macro-averaged P/R/F1/MRR sweep across score thresholds."""
-    return threshold_sweep_from_experiments(
-        experiments,
-        thresholds,
-        score_field=score_field,
-        higher_is_better=higher_is_better,
-        id_field=id_field,
-    )
-
-
-def macro_average(per_case_metrics: list[dict[str, Any]]) -> dict[str, float]:
-    """Average a list of metric dicts (precision, recall, f1, mrr)."""
-    return macro_average_from_metric_dicts(per_case_metrics)
-
-
-def find_optimal_threshold(
-    sweep_results: list[dict[str, Any]],
-    metric: str = "f1",
-) -> dict[str, Any]:
-    """Find the sweep entry maximizing the given metric."""
-    return find_optimal_entry(sweep_results, metric_key=metric)

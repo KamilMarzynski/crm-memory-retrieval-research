@@ -18,19 +18,18 @@ from retrieval_metrics.fingerprint import (
     fingerprint_diff as retrieval_fingerprint_diff,
 )
 
+from retrieval_metrics.compute import reciprocal_rank
+from retrieval_metrics.sweeps import find_optimal_entry
+
 from memory_retrieval.constants import DEFAULT_DISTANCE_THRESHOLD, DEFAULT_SEARCH_LIMIT
-from memory_retrieval.experiments.metrics import (
-    find_optimal_threshold,
-    macro_average,
-    pool_and_deduplicate_by_distance,
-    reciprocal_rank,
-    sweep_threshold,
-    sweep_top_n,
-)
+from memory_retrieval.experiments.metrics import pool_and_deduplicate_by_distance
 from memory_retrieval.experiments.metrics_adapter import (
     build_macro_run_metric_extractor,
     build_per_case_metric_extractor,
     extract_metric_from_nested,
+    macro_average_from_metric_dicts,
+    threshold_sweep_from_experiments,
+    top_n_sweep_from_experiments,
 )
 from memory_retrieval.infra.io import load_json, save_json
 
@@ -262,7 +261,7 @@ class RunSummaryGenerator:
                 for test_case_id in per_test_case
                 if "metrics" in per_test_case[test_case_id]
             ]
-            macro["metrics"] = macro_average(all_metrics)
+            macro["metrics"] = macro_average_from_metric_dicts(all_metrics)
 
         summary["macro_averaged"] = macro
 
@@ -388,13 +387,13 @@ class RunSummaryGenerator:
             all_distances = [entry.get("distance", 0) for entry in pooled_by_distance]
             max_distance = max(all_distances) if all_distances else 1.5
             distance_thresholds = _build_threshold_range(0.0, max_distance, self._threshold_step)
-            tc_distance_sweep = sweep_threshold(
+            tc_distance_sweep = threshold_sweep_from_experiments(
                 [{"ground_truth_ids": ground_truth_ids, "ranked_results": pooled_by_distance}],
                 distance_thresholds,
                 score_field="distance",
                 higher_is_better=False,
             )
-            optimal_distance = find_optimal_threshold(tc_distance_sweep, metric="f1")
+            optimal_distance = find_optimal_entry(tc_distance_sweep, metric_key="f1")
             pre_rerank_entry["distance_threshold"] = {
                 "optimal_threshold": round(optimal_distance.get("threshold", 0.0), 4),
                 "at_optimal": {
@@ -405,11 +404,11 @@ class RunSummaryGenerator:
                 },
             }
 
-            tc_top_n_sweep = sweep_top_n(
+            tc_top_n_sweep = top_n_sweep_from_experiments(
                 [{"ground_truth_ids": ground_truth_ids, "ranked_results": pooled_by_distance}],
                 self._n_values,
             )
-            optimal_top_n = find_optimal_threshold(tc_top_n_sweep, metric="f1")
+            optimal_top_n = find_optimal_entry(tc_top_n_sweep, metric_key="f1")
             pre_rerank_entry["top_n"] = {
                 "optimal_n": optimal_top_n.get("top_n", 1),
                 "at_optimal": {
@@ -434,13 +433,13 @@ class RunSummaryGenerator:
             if all_scores:
                 max_score = max(all_scores)
                 rerank_thresholds = _build_threshold_range(0.0, max_score, self._threshold_step)
-                tc_rerank_sweep = sweep_threshold(
+                tc_rerank_sweep = threshold_sweep_from_experiments(
                     [{"ground_truth_ids": ground_truth_ids, "ranked_results": reranked}],
                     rerank_thresholds,
                     score_field="rerank_score",
                     higher_is_better=True,
                 )
-                optimal_rerank = find_optimal_threshold(tc_rerank_sweep, metric="f1")
+                optimal_rerank = find_optimal_entry(tc_rerank_sweep, metric_key="f1")
                 strategy_entry["rerank_threshold"] = {
                     "optimal_threshold": round(optimal_rerank.get("threshold", 0.0), 4),
                     "at_optimal": {
@@ -451,11 +450,11 @@ class RunSummaryGenerator:
                     },
                 }
 
-            tc_rerank_top_n = sweep_top_n(
+            tc_rerank_top_n = top_n_sweep_from_experiments(
                 [{"ground_truth_ids": ground_truth_ids, "ranked_results": reranked}],
                 self._n_values,
             )
-            optimal_rerank_top_n = find_optimal_threshold(tc_rerank_top_n, metric="f1")
+            optimal_rerank_top_n = find_optimal_entry(tc_rerank_top_n, metric_key="f1")
             strategy_entry["top_n"] = {
                 "optimal_n": optimal_rerank_top_n.get("top_n", 1),
                 "at_optimal": {
@@ -484,16 +483,16 @@ class RunSummaryGenerator:
         distance_global_max = max(all_max_distances) if all_max_distances else 1.5
         distance_thresholds = _build_threshold_range(0.0, distance_global_max, self._threshold_step)
 
-        baseline_threshold_sweep = sweep_threshold(
+        baseline_threshold_sweep = threshold_sweep_from_experiments(
             distance_experiments,
             distance_thresholds,
             score_field="distance",
             higher_is_better=False,
         )
-        optimal_distance_threshold = find_optimal_threshold(baseline_threshold_sweep, metric="f1")
+        optimal_distance_threshold = find_optimal_entry(baseline_threshold_sweep, metric_key="f1")
 
-        baseline_top_n_sweep = sweep_top_n(distance_experiments, self._n_values)
-        optimal_distance_top_n = find_optimal_threshold(baseline_top_n_sweep, metric="f1")
+        baseline_top_n_sweep = top_n_sweep_from_experiments(distance_experiments, self._n_values)
+        optimal_distance_top_n = find_optimal_entry(baseline_top_n_sweep, metric_key="f1")
 
         return {
             "note": "Pre-rerank metrics from distance-sorted candidates (overfetched for reranking)",
@@ -558,16 +557,18 @@ class RunSummaryGenerator:
             global_max = max(all_max_scores) if all_max_scores else 1.0
             rerank_thresholds = _build_threshold_range(0.0, global_max, self._threshold_step)
 
-            threshold_sweep_results = sweep_threshold(
+            threshold_sweep_results = threshold_sweep_from_experiments(
                 experiments_for_sweep,
                 rerank_thresholds,
                 score_field="rerank_score",
                 higher_is_better=True,
             )
-            optimal_threshold = find_optimal_threshold(threshold_sweep_results, metric="f1")
+            optimal_threshold = find_optimal_entry(threshold_sweep_results, metric_key="f1")
 
-            top_n_sweep_results = sweep_top_n(experiments_for_sweep, self._n_values)
-            optimal_n_entry = find_optimal_threshold(top_n_sweep_results, metric="f1")
+            top_n_sweep_results = top_n_sweep_from_experiments(
+                experiments_for_sweep, self._n_values
+            )
+            optimal_n_entry = find_optimal_entry(top_n_sweep_results, metric_key="f1")
 
             rerank_strategies_section[strategy_name] = {
                 "threshold_sweep": {
@@ -611,7 +612,7 @@ class RunSummaryGenerator:
         """Compute macro-averaged metrics for reranking runs."""
         macro: dict[str, Any] = {}
 
-        overfetched_macro = macro_average(all_pre_rerank_metrics)
+        overfetched_macro = macro_average_from_metric_dicts(all_pre_rerank_metrics)
         pre_rerank_macro: dict[str, Any] = {"overfetched": overfetched_macro}
 
         distance_sweep_data = baseline.get("distance_threshold_sweep", {})

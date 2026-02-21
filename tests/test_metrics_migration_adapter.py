@@ -5,9 +5,9 @@ from memory_retrieval.experiments.metrics import (
     compute_metrics,
     compute_metrics_at_threshold,
     compute_metrics_at_top_n,
-    macro_average,
 )
 from memory_retrieval.experiments.metrics_adapter import (
+    macro_average_from_metric_dicts as macro_average,
     restriction_evaluation_to_dict,
     threshold_sweep_from_experiments,
     top_n_sweep_from_experiments,

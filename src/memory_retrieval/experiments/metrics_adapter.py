@@ -1,3 +1,15 @@
+"""Backward-compatibility adapter for the retrieval_metrics migration (Feb 2026).
+
+DEPRECATED: This module maps retrieval_metrics dataclasses to legacy dict shapes
+expected by existing notebook code. Once notebooks are migrated to import from
+retrieval_metrics directly, this module can be retired.
+
+Retirement path:
+1. Update all notebooks to import MetricPoint, SweepResult from retrieval_metrics directly
+2. Remove calls to metric_point_to_dict() and extract_metric_from_nested()
+3. Delete this module
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
