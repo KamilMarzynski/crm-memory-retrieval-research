@@ -1,4 +1,3 @@
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -7,17 +6,15 @@ from typing import Any
 from retrieval_metrics.compute import compute_set_metrics
 from retrieval_metrics.diagnostics import analyze_query_diagnostics
 
+from memory_retrieval.constants import DEFAULT_DISTANCE_THRESHOLD, DEFAULT_SEARCH_LIMIT
 from memory_retrieval.experiments.metrics import pool_and_deduplicate_by_rerank_score
 from memory_retrieval.experiments.metrics_adapter import metric_point_to_dict
 from memory_retrieval.infra.io import load_json, save_json
-from memory_retrieval.memories.schema import FIELD_DISTANCE, FIELD_RERANK_SCORE, FIELD_SITUATION
 from memory_retrieval.memories.helpers import get_confidence_from_distance
+from memory_retrieval.memories.schema import FIELD_DISTANCE, FIELD_RERANK_SCORE, FIELD_SITUATION
 from memory_retrieval.search.base import SearchBackend
 from memory_retrieval.search.reranker import Reranker
-from memory_retrieval.search.vector import VectorBackend
-
-DEFAULT_SEARCH_LIMIT = 20
-DEFAULT_DISTANCE_THRESHOLD = 1.1
+from memory_retrieval.types import RerankerStrategies, TextStrategyFn
 
 
 @dataclass
@@ -28,14 +25,94 @@ class ExperimentConfig:
     search_limit: int = DEFAULT_SEARCH_LIMIT
     distance_threshold: float = DEFAULT_DISTANCE_THRESHOLD
     reranker: Reranker | None = None
-    rerank_text_strategies: dict[str, Callable[[dict[str, Any]], str]] | None = None
+    rerank_text_strategies: RerankerStrategies | None = None
+
+    def __post_init__(self) -> None:
+        if self.search_limit <= 0:
+            raise ValueError(f"search_limit must be > 0, got {self.search_limit}")
+        if not (0 < self.distance_threshold <= 2.0):
+            raise ValueError(f"distance_threshold must be in (0, 2], got {self.distance_threshold}")
+
+
+def _compute_pre_rerank_metrics(
+    query_results: list[dict[str, Any]],
+    ground_truth_ids: set[str],
+    distance_threshold: float,
+) -> dict[str, Any]:
+    """Compute pre-rerank precision/recall/F1 for all results within the distance threshold."""
+    pre_rerank_threshold_ids: set[str] = {
+        entry["id"]
+        for query_result in query_results
+        for entry in query_result["results"]
+        if entry.get("distance", 0) <= distance_threshold
+    }
+    metrics = metric_point_to_dict(compute_set_metrics(pre_rerank_threshold_ids, ground_truth_ids))
+    total_unique = len(
+        {entry["id"] for query_result in query_results for entry in query_result["results"]}
+    )
+    return {
+        "precision": metrics["precision"],
+        "recall": metrics["recall"],
+        "f1": metrics["f1"],
+        "total_unique_retrieved": total_unique,
+        "total_within_threshold": len(pre_rerank_threshold_ids),
+        "ground_truth_retrieved": len(pre_rerank_threshold_ids & ground_truth_ids),
+    }
+
+
+def _execute_queries(
+    queries: list[str],
+    db_path: str,
+    config: ExperimentConfig,
+    ground_truth_ids: set[str],
+) -> tuple[list[dict[str, Any]], set[str]]:
+    """Run all queries against the search backend.
+
+    Tags each result entry with is_ground_truth and the appropriate score field
+    (distance for vector backends, rank for FTS5).
+
+    Returns (query_results, all_retrieved_ids).
+    """
+    all_retrieved_ids: set[str] = set()
+    query_results: list[dict[str, Any]] = []
+
+    for query in queries:
+        results = config.search_backend.search(db_path, query, limit=config.search_limit)
+        retrieved_ids = {result.id for result in results}
+        all_retrieved_ids.update(retrieved_ids)
+
+        result_entries: list[dict[str, Any]] = []
+        for result in results:
+            entry: dict[str, Any] = {
+                "id": result.id,
+                "situation": result.situation,
+                "lesson": result.lesson,
+                "is_ground_truth": result.id in ground_truth_ids,
+            }
+            if result.score_type == "cosine_distance":
+                entry["distance"] = result.raw_score
+                entry["confidence"] = get_confidence_from_distance(result.raw_score)
+            else:
+                entry["rank"] = result.raw_score
+            result_entries.append(entry)
+
+        query_results.append(
+            {
+                "query": query,
+                "word_count": len(query.split()),
+                "result_count": len(results),
+                "results": result_entries,
+            }
+        )
+
+    return query_results, all_retrieved_ids
 
 
 def _run_rerank_strategy(
     reranker: Reranker,
     query_results: list[dict[str, Any]],
     ground_truth_ids: set[str],
-    text_fn: Callable[[dict[str, Any]], str] | None = None,
+    text_fn: TextStrategyFn | None = None,
     text_field: str = "situation",
 ) -> dict[str, Any]:
     """Run reranking for a single text strategy and return all pooled results.
@@ -112,6 +189,76 @@ def _run_rerank_strategy(
     }
 
 
+def _print_experiment_summary(
+    all_results: list[dict[str, Any]],
+    config: ExperimentConfig,
+) -> None:
+    """Print aggregate metrics after all experiments complete."""
+    success_key = "pre_rerank_metrics" if config.reranker is not None else "metrics"
+    successful = [
+        experiment_result for experiment_result in all_results if success_key in experiment_result
+    ]
+
+    print("\n" + "=" * 60)
+    print("OVERALL SUMMARY")
+    print("=" * 60)
+
+    if not successful:
+        print("No successful experiments")
+        if len(successful) < len(all_results):
+            print(f"Failed experiments: {len(all_results) - len(successful)}")
+        return
+
+    if config.reranker is not None:
+        print(f"Experiments run: {len(successful)}")
+
+        avg_pre_n = sum(
+            experiment_result["pre_rerank_metrics"]["total_within_threshold"]
+            for experiment_result in successful
+        ) / len(successful)
+
+        print(
+            f"\nPre-rerank metrics (all candidates within distance threshold, ~{avg_pre_n:.0f} avg):"
+        )
+        for metric in ["recall", "precision", "f1"]:
+            avg_value = sum(
+                experiment_result["pre_rerank_metrics"][metric] for experiment_result in successful
+            ) / len(successful)
+            print(f"  {metric:<12} {avg_value:.3f}")
+
+        print(
+            "\nReranked results stored — use notebook analysis cells for top-N and threshold sweeps."
+        )
+    else:
+        avg_recall = sum(
+            experiment_result["metrics"]["recall"] for experiment_result in successful
+        ) / len(successful)
+        avg_precision = sum(
+            experiment_result["metrics"]["precision"] for experiment_result in successful
+        ) / len(successful)
+        avg_f1 = sum(experiment_result["metrics"]["f1"] for experiment_result in successful) / len(
+            successful
+        )
+        total_gt = sum(
+            experiment_result["ground_truth"]["count"] for experiment_result in successful
+        )
+        total_retrieved = sum(
+            experiment_result["metrics"]["ground_truth_retrieved"]
+            for experiment_result in successful
+        )
+
+        print(f"Experiments run: {len(successful)}")
+        print(f"Total ground truth memories: {total_gt}")
+        print(f"Total retrieved: {total_retrieved}")
+        print("\nAGGREGATE METRICS:")
+        print(f"  Average recall:    {avg_recall:.1%}")
+        print(f"  Average precision: {avg_precision:.1%}")
+        print(f"  Average F1:        {avg_f1:.3f}")
+
+    if len(successful) < len(all_results):
+        print(f"Failed experiments: {len(all_results) - len(successful)}")
+
+
 def run_experiment(
     test_case_path: str,
     query_file_path: str,
@@ -131,43 +278,9 @@ def run_experiment(
     diff_stats = test_case.get("diff_stats", {})
 
     queries = query_data.get("queries", [])
-
     test_case_id = test_case.get("test_case_id", "unknown")
 
-    # Execute search for each query
-    all_retrieved_ids: set[str] = set()
-    query_results: list[dict[str, Any]] = []
-    is_vector = isinstance(config.search_backend, VectorBackend)
-
-    for query in queries:
-        results = config.search_backend.search(db_path, query, limit=config.search_limit)
-        retrieved_ids = {result.id for result in results}
-        all_retrieved_ids.update(retrieved_ids)
-
-        query_result_entries = []
-        for result in results:
-            result_entry: dict[str, Any] = {
-                "id": result.id,
-                "situation": result.situation,
-                "lesson": result.lesson,
-                "is_ground_truth": result.id in ground_truth_ids,
-            }
-            if is_vector:
-                result_entry["distance"] = result.raw_score
-                result_entry["confidence"] = get_confidence_from_distance(result.raw_score)
-            else:
-                result_entry["rank"] = result.raw_score
-
-            query_result_entries.append(result_entry)
-
-        query_results.append(
-            {
-                "query": query,
-                "word_count": len(query.split()),
-                "result_count": len(results),
-                "results": query_result_entries,
-            }
-        )
+    query_results, all_retrieved_ids = _execute_queries(queries, db_path, config, ground_truth_ids)
 
     # --- Build result structure ---
     result: dict[str, Any] = {
@@ -197,25 +310,9 @@ def run_experiment(
         result["distance_threshold"] = config.distance_threshold
         result["reranker_model"] = config.reranker.model_name
 
-        # Pre-rerank metrics (all candidates within distance threshold)
-        pre_rerank_threshold_ids: set[str] = {
-            entry["id"]
-            for query_result in query_results
-            for entry in query_result["results"]
-            if entry.get("distance", 0) <= config.distance_threshold
-        }
-        pre_rerank_metrics = metric_point_to_dict(
-            compute_set_metrics(pre_rerank_threshold_ids, ground_truth_ids)
+        result["pre_rerank_metrics"] = _compute_pre_rerank_metrics(
+            query_results, ground_truth_ids, config.distance_threshold
         )
-
-        result["pre_rerank_metrics"] = {
-            "precision": pre_rerank_metrics["precision"],
-            "recall": pre_rerank_metrics["recall"],
-            "f1": pre_rerank_metrics["f1"],
-            "total_unique_retrieved": len(all_retrieved_ids),
-            "total_within_threshold": len(pre_rerank_threshold_ids),
-            "ground_truth_retrieved": len(pre_rerank_threshold_ids & ground_truth_ids),
-        }
 
         # Per-query reranking with strategy support
         strategies = config.rerank_text_strategies or {"default": None}
@@ -249,7 +346,15 @@ def run_experiment(
         # --- Standard (no reranking) path ---
         result["distance_threshold"] = config.distance_threshold
 
-        if is_vector:
+        # Vector results have a "distance" key; FTS5 results have a "rank" key.
+        # Use distance-based filtering only when results contain distance scores.
+        uses_distance_filtering = any(
+            "distance" in entry
+            for query_result in query_results
+            for entry in query_result["results"]
+        )
+
+        if uses_distance_filtering:
             filtered_retrieved_ids: set[str] = {
                 entry["id"]
                 for query_result in query_results
@@ -336,70 +441,5 @@ def run_all_experiments(
             print(f"[{i + 1}/{len(test_case_files)}] {test_case_file.stem} — ERROR: {error}")
             all_results.append({"test_case_file": test_case_file.name, "error": str(error)})
 
-    # Print summary
-    print("\n" + "=" * 60)
-    print("OVERALL SUMMARY")
-    print("=" * 60)
-
-    success_key = "pre_rerank_metrics" if config.reranker is not None else "metrics"
-    successful = [
-        experiment_result for experiment_result in all_results if success_key in experiment_result
-    ]
-
-    if config.reranker is not None:
-        if successful:
-            print(f"Experiments run: {len(successful)}")
-
-            avg_pre_n = sum(
-                experiment_result["pre_rerank_metrics"]["total_within_threshold"]
-                for experiment_result in successful
-            ) / len(successful)
-
-            print(
-                f"\nPre-rerank metrics (all candidates within distance threshold, ~{avg_pre_n:.0f} avg):"
-            )
-            for metric in ["recall", "precision", "f1"]:
-                avg_value = sum(
-                    experiment_result["pre_rerank_metrics"][metric]
-                    for experiment_result in successful
-                ) / len(successful)
-                print(f"  {metric:<12} {avg_value:.3f}")
-
-            print(
-                "\nReranked results stored — use notebook analysis cells for top-N and threshold sweeps."
-            )
-        else:
-            print("No successful experiments")
-    else:
-        if successful:
-            avg_recall = sum(
-                experiment_result["metrics"]["recall"] for experiment_result in successful
-            ) / len(successful)
-            avg_precision = sum(
-                experiment_result["metrics"]["precision"] for experiment_result in successful
-            ) / len(successful)
-            avg_f1 = sum(
-                experiment_result["metrics"]["f1"] for experiment_result in successful
-            ) / len(successful)
-            total_gt = sum(
-                experiment_result["ground_truth"]["count"] for experiment_result in successful
-            )
-            total_retrieved = sum(
-                experiment_result["metrics"]["ground_truth_retrieved"]
-                for experiment_result in successful
-            )
-
-            print(f"Experiments run: {len(successful)}")
-            print(f"Total ground truth memories: {total_gt}")
-            print(f"Total retrieved: {total_retrieved}")
-            print("\nAGGREGATE METRICS:")
-            print(f"  Average recall:    {avg_recall:.1%}")
-            print(f"  Average precision: {avg_precision:.1%}")
-            print(f"  Average F1:        {avg_f1:.3f}")
-        else:
-            print("No successful experiments")
-
-    if len(successful) < len(all_results):
-        print(f"Failed experiments: {len(all_results) - len(successful)}")
-
+    _print_experiment_summary(all_results, config)
     return all_results
