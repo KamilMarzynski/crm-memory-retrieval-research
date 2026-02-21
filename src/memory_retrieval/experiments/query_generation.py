@@ -1,7 +1,7 @@
 import json
+import logging
 import os
 import re
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
@@ -14,6 +14,8 @@ from memory_retrieval.infra.prompts import load_prompt
 from memory_retrieval.memories.schema import FIELD_SITUATION
 from memory_retrieval.search.base import SearchBackend
 from memory_retrieval.search.vector import VectorBackend
+
+logger = logging.getLogger(__name__)
 
 # Model configuration
 DEFAULT_MODEL = "anthropic/claude-sonnet-4.5"
@@ -33,33 +35,60 @@ TARGET_QUERY_WORDS_MAX = 50
 DEFAULT_MAX_WORKERS = 5
 
 
-def parse_queries_robust(response: str) -> list[str]:
-    """Robustly parse query list from LLM response with multiple fallback strategies."""
-    # Try direct JSON parse first
+def _truncate_text(text: str, max_chars: int) -> str:
+    """Truncate text to max_chars, appending a truncation notice."""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n... (truncated)"
+
+
+def _parse_json_array_queries(text: str) -> list[str] | None:
+    """Try to parse a JSON array of query strings from the LLM response.
+
+    Returns the list if found and valid, None otherwise.
+    """
     try:
-        match = re.search(r"\[[\s\S]*\]", response)
+        match = re.search(r"\[[\s\S]*\]", text)
         if match:
             queries = json.loads(match.group())
             if isinstance(queries, list) and all(isinstance(q, str) for q in queries):
                 return queries[:MAX_QUERIES_PER_EXPERIMENT]
     except json.JSONDecodeError:
         pass
+    return None
 
-    # Fallback: extract quoted strings (20-200 chars for reasonable queries)
-    quoted = re.findall(r'"([^"]{20,200})"', response)
-    if quoted:
-        return quoted[:MAX_QUERIES_PER_EXPERIMENT]
 
-    # Last resort: split by newlines and clean
+def _parse_quoted_queries(text: str) -> list[str] | None:
+    """Try to extract double-quoted strings (20–200 chars) as queries.
+
+    Returns the list if any found, None otherwise.
+    """
+    quoted = re.findall(r'"([^"]{20,200})"', text)
+    return quoted[:MAX_QUERIES_PER_EXPERIMENT] if quoted else None
+
+
+def _parse_newline_queries(text: str) -> list[str]:
+    """Parse queries by splitting on newlines and stripping list formatting.
+
+    Last-resort fallback — always returns a list (possibly empty).
+    """
     lines = []
-    for line in response.split("\n"):
+    for line in text.split("\n"):
         line = line.strip()
         line = re.sub(r"^[\d\.\-\*]+\s*", "", line)
         line = line.strip("\"'")
         if 20 <= len(line) <= 200:
             lines.append(line)
-
     return lines[:MAX_QUERIES_PER_EXPERIMENT]
+
+
+def parse_queries_robust(response: str) -> list[str]:
+    """Robustly parse query list from LLM response with multiple fallback strategies."""
+    return (
+        _parse_json_array_queries(response)
+        or _parse_quoted_queries(response)
+        or _parse_newline_queries(response)
+    )
 
 
 @dataclass
@@ -71,6 +100,10 @@ class QueryGenerationConfig:
     model: str = DEFAULT_MODEL
     use_sample_memories: bool = True
     max_workers: int = DEFAULT_MAX_WORKERS
+
+    def __post_init__(self) -> None:
+        if self.max_workers <= 0:
+            raise ValueError(f"max_workers must be > 0, got {self.max_workers}")
 
 
 def _get_random_sample_memories(
@@ -113,11 +146,9 @@ def generate_queries_for_test_case(
         prompts_dir=config.prompts_dir,
     )
 
-    # Truncate inputs
-    if len(context) > MAX_CONTEXT_LENGTH:
-        context = context[:MAX_CONTEXT_LENGTH] + "\n... (truncated)"
-    if len(filtered_diff) > MAX_DIFF_LENGTH:
-        filtered_diff = filtered_diff[:MAX_DIFF_LENGTH] + "\n... (truncated)"
+    # Truncate inputs to stay within token limits
+    context = _truncate_text(context, MAX_CONTEXT_LENGTH)
+    filtered_diff = _truncate_text(filtered_diff, MAX_DIFF_LENGTH)
 
     # Get sample memories for v2+ prompts
     sample_memories: list[dict[str, Any]] = []
@@ -188,7 +219,6 @@ def generate_all_queries(
     total = len(test_case_files)
     results_by_file: dict[Path, dict[str, Any]] = {}
     completed_count = 0
-    print_lock = threading.Lock()
 
     def process_one(test_case_file: Path) -> tuple[Path, dict[str, Any]]:
         try:
@@ -209,21 +239,28 @@ def generate_all_queries(
             completed_file, query_data = future.result()
             results_by_file[completed_file] = query_data
 
-            with print_lock:
-                completed_count += 1
-                if "error" in query_data:
-                    print(
-                        f"[{completed_count}/{total}] {completed_file.stem} — ERROR: {query_data['error']}"
-                    )
-                else:
-                    num_queries = len(query_data.get("queries", []))
-                    print(
-                        f"[{completed_count}/{total}] {completed_file.stem} — {num_queries} queries"
-                    )
+            completed_count += 1
+            if "error" in query_data:
+                logger.info(
+                    "[%d/%d] %s — ERROR: %s",
+                    completed_count,
+                    total,
+                    completed_file.stem,
+                    query_data["error"],
+                )
+            else:
+                num_queries = len(query_data.get("queries", []))
+                logger.info(
+                    "[%d/%d] %s — %d queries",
+                    completed_count,
+                    total,
+                    completed_file.stem,
+                    num_queries,
+                )
 
     # Return in deterministic sorted order
     all_query_data = [results_by_file[f] for f in test_case_files]
     successful = [data for data in all_query_data if "queries" in data]
-    print(f"\nGenerated queries for {len(successful)}/{total} test cases")
+    logger.info("Generated queries for %d/%d test cases", len(successful), total)
 
     return all_query_data
