@@ -94,7 +94,9 @@ class Reranker:
             return []
 
         documents = (
-            [text_fn(c) for c in candidates] if text_fn else [c[text_field] for c in candidates]
+            [text_fn(candidate) for candidate in candidates]
+            if text_fn
+            else [candidate[text_field] for candidate in candidates]
         )
         scores = self.score_pairs(query, documents)
 
