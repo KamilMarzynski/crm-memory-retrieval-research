@@ -48,6 +48,11 @@ def _get_runs_dir(phase: str) -> Path:
 
 
 def _generate_run_id() -> str:
+    """Generate a timestamp-based run ID with microsecond precision.
+
+    Microseconds prevent collisions when two runs are created within the same
+    second (e.g. in batch_runner.py running multiple pipeline configurations).
+    """
     return f"{RUN_PREFIX}{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
 
 
@@ -65,6 +70,20 @@ def _save_run_metadata(run_dir: Path, metadata: dict[str, Any]) -> None:
         json.dump(metadata, f, indent=2, ensure_ascii=False)
 
 
+def _build_run_metadata(
+    run_id: str,
+    phase: str,
+    description: str | None,
+) -> dict[str, Any]:
+    return {
+        "run_id": run_id,
+        "created_at": datetime.now().isoformat(),
+        "phase": phase,
+        "description": description,
+        "pipeline_status": {},
+    }
+
+
 def create_run(
     phase: str,
     description: str | None = None,
@@ -79,13 +98,7 @@ def create_run(
     (run_dir / "queries").mkdir(exist_ok=True)
     (run_dir / "results").mkdir(exist_ok=True)
 
-    metadata: dict[str, Any] = {
-        "run_id": run_id,
-        "created_at": datetime.now().isoformat(),
-        "phase": phase,
-        "description": description,
-        "pipeline_status": {},
-    }
+    metadata = _build_run_metadata(run_id, phase, description)
     _save_run_metadata(run_dir, metadata)
 
     return run_id, run_dir
@@ -177,6 +190,20 @@ def update_config_fingerprint(
 # ---------------------------------------------------------------------------
 
 
+def _build_subrun_metadata(
+    subrun_id: str,
+    parent_run_id: str,
+    description: str | None,
+) -> dict[str, Any]:
+    return {
+        "subrun_id": subrun_id,
+        "parent_run_id": parent_run_id,
+        "created_at": datetime.now().isoformat(),
+        "description": description,
+        "pipeline_status": {},
+    }
+
+
 def create_subrun(
     parent_run_dir: Path,
     subrun_id: str,
@@ -209,13 +236,7 @@ def create_subrun(
     parent_metadata = _load_run_metadata(parent_run_dir)
     parent_run_id = parent_metadata.get("run_id", parent_run_dir.name)
 
-    subrun_metadata: dict[str, Any] = {
-        "subrun_id": subrun_id,
-        "parent_run_id": parent_run_id,
-        "created_at": datetime.now().isoformat(),
-        "description": description,
-        "pipeline_status": {},
-    }
+    subrun_metadata = _build_subrun_metadata(subrun_id, parent_run_id, description)
 
     metadata_path = subrun_dir / SUBRUN_METADATA_FILE
     with open(metadata_path, "w", encoding="utf-8") as f:

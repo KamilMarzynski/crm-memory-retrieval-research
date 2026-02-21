@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-class _SafeDict(dict):
+class _SafeDict(dict[str, str]):
     def __missing__(self, key: str) -> str:
         return ""
 
@@ -57,6 +57,25 @@ class Prompt:
         return messages
 
 
+def _find_latest_semver_file(prompt_dir: Path) -> Path | None:
+    """Return the prompt file with the highest semver in the given directory.
+
+    Returns None if no valid semver files exist.
+    """
+    best_file: Path | None = None
+    best_ver: tuple[int, int, int] = (-1, -1, -1)
+    for md_file in sorted(prompt_dir.glob("v*.md")):
+        ver_str = md_file.stem[1:]
+        try:
+            ver_tuple = _parse_semver(ver_str)
+            if ver_tuple > best_ver:
+                best_ver = ver_tuple
+                best_file = md_file
+        except ValueError:
+            continue
+    return best_file
+
+
 def load_prompt(
     name: str,
     version: str | None = None,
@@ -73,25 +92,11 @@ def load_prompt(
             raise FileNotFoundError(f"Prompt file not found: {file_path}")
         _parse_semver(version)
     else:
-        md_files = sorted(prompt_dir.glob("v*.md"))
-        if not md_files:
+        if not list(prompt_dir.glob("v*.md")):
             raise FileNotFoundError(f"No prompt files found in {prompt_dir}")
-
-        best_file = None
-        best_ver = (-1, -1, -1)
-        for md_file in md_files:
-            ver_str = md_file.stem[1:]
-            try:
-                ver_tuple = _parse_semver(ver_str)
-                if ver_tuple > best_ver:
-                    best_ver = ver_tuple
-                    best_file = md_file
-            except ValueError:
-                continue
-
+        best_file = _find_latest_semver_file(prompt_dir)
         if best_file is None:
             raise FileNotFoundError(f"No valid semver prompt files in {prompt_dir}")
-
         file_path = best_file
         version = best_file.stem[1:]
 

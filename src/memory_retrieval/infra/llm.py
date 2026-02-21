@@ -16,6 +16,25 @@ def call_openrouter(
     max_tokens: int = DEFAULT_MAX_TOKENS,
     timeout_s: int = DEFAULT_TIMEOUT_S,
 ) -> str:
+    """Call the OpenRouter API and return the assistant message content.
+
+    OpenRouter accepts messages in OpenAI chat format:
+      [{"role": "system", "content": "..."}, {"role": "user", "content": "..."}]
+
+    Args:
+        api_key: OpenRouter API key (from OPENROUTER_API_KEY env var).
+        model: OpenRouter model ID (e.g. "anthropic/claude-haiku-4.5").
+        messages: Conversation messages in OpenAI chat format.
+        temperature: Sampling temperature (0.0 = deterministic).
+        max_tokens: Maximum tokens in the response.
+        timeout_s: HTTP request timeout in seconds.
+
+    Returns:
+        The assistant's response text, stripped of leading/trailing whitespace.
+
+    Raises:
+        requests.HTTPError: On non-2xx API responses.
+    """
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
