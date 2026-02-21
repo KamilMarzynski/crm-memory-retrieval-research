@@ -1,10 +1,11 @@
 import json
 from pathlib import Path
-from typing import Any
+
+from memory_retrieval.types import MemoryDict
 
 
-def load_memories(memories_dir: str | Path) -> list[dict[str, Any]]:
-    memories: list[dict[str, Any]] = []
+def load_memories(memories_dir: str | Path) -> list[MemoryDict]:
+    memories: list[MemoryDict] = []
     memories_path = Path(memories_dir)
 
     for jsonl_file in sorted(memories_path.glob("memories_*.jsonl")):

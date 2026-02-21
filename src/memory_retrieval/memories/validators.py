@@ -1,5 +1,7 @@
 from collections.abc import Callable
 
+from memory_retrieval.infra.prompts import _parse_semver
+
 
 def validate_situation_v1(text: str) -> tuple[bool, str]:
     """Validation for v1 prompts (40-450 chars)."""
@@ -49,4 +51,6 @@ def get_situation_validator(version: str) -> Callable[[str], tuple[bool, str]]:
     """Get situation validator for a prompt version, defaulting to the latest."""
     if version in SITUATION_VALIDATORS:
         return SITUATION_VALIDATORS[version]
-    return max(SITUATION_VALIDATORS.values(), key=lambda f: f.__name__)
+    # Fall back to the validator for the highest registered version
+    latest_version = max(SITUATION_VALIDATORS.keys(), key=_parse_semver)
+    return SITUATION_VALIDATORS[latest_version]
