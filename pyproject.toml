@@ -66,5 +66,9 @@ retrieval-metrics = { git = "https://github.com/KamilMarzynski/retrieval-metrics
 [dependency-groups]
 dev = [
     "nbstripout>=0.9.0",
+    "pytest>=8.0.0",
     "ruff>=0.15.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
