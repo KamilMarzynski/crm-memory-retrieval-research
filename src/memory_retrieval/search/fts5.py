@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from contextlib import AbstractContextManager
 from typing import Any
 
 from memory_retrieval.memories.loader import load_memories
@@ -11,7 +12,7 @@ from memory_retrieval.memories.schema import (
     FIELD_SOURCE,
     FIELD_VARIANTS,
 )
-from memory_retrieval.search.base import SearchResult
+from memory_retrieval.search.base import SearchBackendBase, SearchResult
 from memory_retrieval.search.db_utils import (
     deserialize_json_field,
     get_db_connection,
@@ -19,8 +20,12 @@ from memory_retrieval.search.db_utils import (
 )
 
 
-class FTS5Backend:
+class FTS5Backend(SearchBackendBase):
     """Full-text search backend using SQLite FTS5 for keyword-based retrieval."""
+
+    def _get_db_connection(self, db_path: str) -> AbstractContextManager[sqlite3.Connection]:
+        """Return a context manager for a plain SQLite connection."""
+        return get_db_connection(db_path)
 
     def create_database(self, db_path: str) -> None:
         """Create database schema with memories table and FTS5 index.
