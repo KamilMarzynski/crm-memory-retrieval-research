@@ -37,7 +37,9 @@ def compute_metrics(
 
 def analyze_query_performance(query_results: list[dict[str, Any]]) -> dict[str, Any]:
     """Analyze per-query performance metrics across all queries in an experiment."""
-    diagnostics = analyze_query_diagnostics(query_results, relevance_key="is_ground_truth", score_key="distance")
+    diagnostics = analyze_query_diagnostics(
+        query_results, relevance_key="is_ground_truth", score_key="distance"
+    )
 
     # Keep backward-compatible key names for existing notebooks and scripts.
     for query_entry in diagnostics.get("best_queries", []):

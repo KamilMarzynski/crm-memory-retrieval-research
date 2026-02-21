@@ -258,7 +258,9 @@ def run_experiment(
         else:
             filtered_retrieved_ids = all_retrieved_ids
 
-        metrics = metric_point_to_dict(compute_set_metrics(filtered_retrieved_ids, ground_truth_ids))
+        metrics = metric_point_to_dict(
+            compute_set_metrics(filtered_retrieved_ids, ground_truth_ids)
+        )
         query_analysis = analyze_query_diagnostics(
             query_results,
             relevance_key="is_ground_truth",

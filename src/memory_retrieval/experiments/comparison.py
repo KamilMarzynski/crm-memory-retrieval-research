@@ -859,7 +859,9 @@ def compute_variance_report(
     Returns:
         Dict with run-level and per-test-case variance statistics.
     """
-    run_value_extractor = build_macro_run_metric_extractor(metric_path=metric_path, strategy=strategy)
+    run_value_extractor = build_macro_run_metric_extractor(
+        metric_path=metric_path, strategy=strategy
+    )
     per_case_extractor = build_per_case_metric_extractor(metric_path=metric_path, strategy=strategy)
     report = retrieval_compute_variance_report(
         run_summaries=summaries,

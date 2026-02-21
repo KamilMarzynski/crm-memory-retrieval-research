@@ -18,7 +18,9 @@ RunMetricExtractor = Callable[[Mapping[str, Any], str], float | None]
 PerCaseMetricExtractor = Callable[[Mapping[str, Any], str], dict[str, float]]
 
 
-def metric_point_to_dict(metric_point: MetricPoint, round_digits: int | None = None) -> dict[str, float]:
+def metric_point_to_dict(
+    metric_point: MetricPoint, round_digits: int | None = None
+) -> dict[str, float]:
     """Convert a MetricPoint into the project's dict shape."""
     values = {
         "precision": float(metric_point.precision),
@@ -45,7 +47,9 @@ def restriction_evaluation_to_dict(
     return payload
 
 
-def macro_average_from_metric_dicts(per_case_metrics: Sequence[Mapping[str, Any]]) -> dict[str, float]:
+def macro_average_from_metric_dicts(
+    per_case_metrics: Sequence[Mapping[str, Any]],
+) -> dict[str, float]:
     """Macro-average precision/recall/F1/MRR from metric dicts."""
     if not per_case_metrics:
         return {"precision": 0.0, "recall": 0.0, "f1": 0.0, "mrr": 0.0}
@@ -132,7 +136,9 @@ def build_macro_run_metric_extractor(
     """Create extractor for run-level metric value from legacy macro_averaged payloads."""
 
     def extractor(summary: Mapping[str, Any], metric_key: str) -> float | None:
-        return extract_metric_from_nested(summary.get("macro_averaged", {}), metric_path, strategy, metric_key)
+        return extract_metric_from_nested(
+            summary.get("macro_averaged", {}), metric_path, strategy, metric_key
+        )
 
     return extractor
 
@@ -167,7 +173,9 @@ def extract_metric_from_nested(
         macro_value = post_rerank.get("at_optimal_threshold", {}).get(metric_key)
         if macro_value is not None:
             return float(macro_value)
-        per_case_value = post_rerank.get("rerank_threshold", {}).get("at_optimal", {}).get(metric_key)
+        per_case_value = (
+            post_rerank.get("rerank_threshold", {}).get("at_optimal", {}).get(metric_key)
+        )
         if per_case_value is not None:
             return float(per_case_value)
         return None
@@ -177,7 +185,9 @@ def extract_metric_from_nested(
         macro_value = pre_rerank.get("at_optimal_distance_threshold", {}).get(metric_key)
         if macro_value is not None:
             return float(macro_value)
-        per_case_value = pre_rerank.get("distance_threshold", {}).get("at_optimal", {}).get(metric_key)
+        per_case_value = (
+            pre_rerank.get("distance_threshold", {}).get("at_optimal", {}).get(metric_key)
+        )
         if per_case_value is not None:
             return float(per_case_value)
         return None
