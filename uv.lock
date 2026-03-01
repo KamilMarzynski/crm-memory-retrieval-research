@@ -2069,7 +2069,7 @@ wheels = [
 [[package]]
 name = "retrieval-metrics"
 version = "0.1.0"
-source = { git = "https://github.com/KamilMarzynski/retrieval-metrics.git#e06dadd015c8e11d887198de96b92ffc9e4f5578" }
+source = { git = "https://github.com/KamilMarzynski/retrieval-metrics.git#32f82e7e63c5166375cf6ea44abeaa64b4a6d33d" }
 dependencies = [
     { name = "numpy" },
     { name = "scipy" },

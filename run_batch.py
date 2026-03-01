@@ -127,7 +127,7 @@ subrun_config = BatchSubrunConfig(
     parent_run_ids=parent_run_ids,
     experiment_config=ExperimentConfig(
         search_backend=SentenceTransformerVectorBackend(
-            model_name="perplexity-ai/pplx-embed-v1-0.6B"
+            model_name="perplexity-ai/pplx-embed-context-v1-0.6B"
         ),
         reranker=Reranker(),
         rerank_text_strategies=RERANK_TEXT_STRATEGIES,
