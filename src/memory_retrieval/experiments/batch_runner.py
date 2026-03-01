@@ -60,7 +60,7 @@ from memory_retrieval.infra.runs import (
     update_subrun_status,
 )
 from memory_retrieval.memories.extractor import ExtractionConfig, extract_memories
-from memory_retrieval.search.vector import DEFAULT_EMBEDDING_MODEL, VectorBackend
+from memory_retrieval.search.vector import DEFAULT_EMBEDDING_MODEL, VectorBackend, _VectorSearchBase
 
 DATA_DIR = Path("data")
 BATCHES_SUBDIR = "batches"
@@ -344,11 +344,11 @@ def _run_one_full_pipeline(
         # Stage 3: Build vector database
         logger.info("[%d] Building vector database...", run_index)
         search_backend = config.experiment_config.search_backend
-        if isinstance(search_backend, VectorBackend):
+        if isinstance(search_backend, _VectorSearchBase):
             search_backend.rebuild_database(db_path, memories_dir)
         else:
             raise TypeError(
-                f"Full pipeline batch requires a VectorBackend, got {type(search_backend).__name__}"
+                f"Full pipeline batch requires a vector search backend, got {type(search_backend).__name__}"
             )
 
         update_run_status(run_dir, "db", {"memory_count": total_memories_written})
@@ -491,9 +491,9 @@ def _run_one_subrun(
         if config.rebuild_db:
             logger.info("[%d] Rebuilding DB in subrun dir...", run_index)
             search_backend = config.experiment_config.search_backend
-            if not isinstance(search_backend, VectorBackend):
+            if not isinstance(search_backend, _VectorSearchBase):
                 raise TypeError(
-                    f"rebuild_db=True requires a VectorBackend, got {type(search_backend).__name__}"
+                    f"rebuild_db=True requires a vector search backend, got {type(search_backend).__name__}"
                 )
             subrun_db_path = str(subrun_dir / "memories.db")
             search_backend.rebuild_database(subrun_db_path, parent_memories_dir)
@@ -727,7 +727,7 @@ def _extract_experiment_fingerprint_fields(
     search_backend = experiment_config.search_backend
     embedding_model = (
         getattr(search_backend, "embedding_model", DEFAULT_EMBEDDING_MODEL)
-        if isinstance(search_backend, VectorBackend)
+        if isinstance(search_backend, _VectorSearchBase)
         else UNKNOWN_VERSION
     )
     reranker = experiment_config.reranker
