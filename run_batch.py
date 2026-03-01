@@ -167,10 +167,8 @@ if __name__ == "__main__":
     for batch_outcome, pplx_subrun_config in zip(all_outcomes, pplx_subrun_configs):
         print(f"\n  Model: {pplx_subrun_config.description}")
         print(f"  Batch dir: {batch_outcome.batch_dir}")
-        print(
-            f"  Completed: {batch_outcome.num_completed} / {len(batch_outcome.outcomes)}"
-            f"  Failed: {batch_outcome.num_failed}"
-        )
+        print(f"  Completed: {batch_outcome.num_completed} / {len(batch_outcome.outcomes)}")
+        print(f"  Failed: {batch_outcome.num_failed}")
         print("  Subrun IDs:")
         for single_run_outcome in batch_outcome.outcomes:
             if single_run_outcome.run_id and single_run_outcome.status == "completed":
