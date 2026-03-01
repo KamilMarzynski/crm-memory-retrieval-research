@@ -12,6 +12,11 @@ EMBEDDING_MODEL_DIMENSIONS: dict[str, int] = {
     "snowflake-arctic-embed": 1024,
     "bge-large": 1024,
     "bge-m3": 1024,
+    # Perplexity pplx-embed-v1 — local via SentenceTransformers (trust_remote_code=True)
+    "perplexity-ai/pplx-embed-v1-0.6B": 1024,
+    "perplexity-ai/pplx-embed-v1-4B": 2560,
+    "perplexity-ai/pplx-embed-context-v1-0.6B": 1024,
+    "perplexity-ai/pplx-embed-context-v1-4B": 2560,
 }
 
 # ---------------------------------------------------------------------------
