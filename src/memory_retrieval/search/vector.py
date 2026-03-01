@@ -297,9 +297,11 @@ class SentenceTransformerVectorBackend(_VectorSearchBase):
         return self._loaded_model
 
     def _get_embedding(self, text: str) -> list[float]:
-        embeddings = self._model.encode([text])
+        # normalize_embeddings=True converts int8 → float32 → unit norm,
+        # ensuring L2 distances from sqlite-vec are equivalent to cosine distances.
+        embeddings = self._model.encode([text], normalize_embeddings=True)
         return embeddings[0].tolist()
 
     def _get_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
-        embeddings = self._model.encode(texts)
+        embeddings = self._model.encode(texts, normalize_embeddings=True)
         return [embedding.tolist() for embedding in embeddings]
