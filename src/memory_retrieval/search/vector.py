@@ -9,6 +9,11 @@ from typing import Any
 import ollama
 import sqlite_vec
 
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError:
+    SentenceTransformer = None  # type: ignore[assignment,misc]
+
 from memory_retrieval.constants import EMBEDDING_MODEL_DIMENSIONS
 from memory_retrieval.memories.loader import load_memories
 from memory_retrieval.memories.schema import (
@@ -253,3 +258,47 @@ class VectorBackend(_VectorSearchBase):
             response = client.embed(model=self.embedding_model, input=chunk)
             all_embeddings.extend(response["embeddings"])
         return all_embeddings
+
+
+class SentenceTransformerVectorBackend(_VectorSearchBase):
+    """Vector search backend using local SentenceTransformer models for embedding.
+
+    Designed for models that require `trust_remote_code=True` (e.g. Perplexity pplx-embed-v1).
+    The SentenceTransformer model is lazy-loaded on first use to avoid startup cost.
+
+    Args:
+        model_name: HuggingFace model ID (e.g. "perplexity-ai/pplx-embed-v1-0.6B").
+        vector_dimensions: Embedding dimension size. If None, auto-detected from
+            EMBEDDING_MODEL_DIMENSIONS or falls back to DEFAULT_VECTOR_DIMENSIONS.
+    """
+
+    def __init__(
+        self,
+        model_name: str,
+        vector_dimensions: int | None = None,
+    ) -> None:
+        self.embedding_model = model_name
+        self.vector_dimensions = vector_dimensions or EMBEDDING_MODEL_DIMENSIONS.get(
+            model_name, DEFAULT_VECTOR_DIMENSIONS
+        )
+        self._loaded_model: Any = None
+
+    @property
+    def _model(self) -> Any:
+        """Lazy-load the SentenceTransformer model on first access."""
+        if self._loaded_model is None:
+            if SentenceTransformer is None:
+                raise ImportError(
+                    "sentence-transformers is required for SentenceTransformerVectorBackend. "
+                    "Install it with: uv add sentence-transformers"
+                )
+            self._loaded_model = SentenceTransformer(self.embedding_model, trust_remote_code=True)
+        return self._loaded_model
+
+    def _get_embedding(self, text: str) -> list[float]:
+        embeddings = self._model.encode([text])
+        return embeddings[0].tolist()
+
+    def _get_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
+        embeddings = self._model.encode(texts)
+        return [embedding.tolist() for embedding in embeddings]
