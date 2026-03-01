@@ -277,14 +277,15 @@ class SentenceTransformerVectorBackend(_VectorSearchBase):
         model_name: str,
         vector_dimensions: int | None = None,
     ) -> None:
+        # embedding_model is required by _VectorSearchBase (used in rebuild_database logging)
         self.embedding_model = model_name
         self.vector_dimensions = vector_dimensions or EMBEDDING_MODEL_DIMENSIONS.get(
             model_name, DEFAULT_VECTOR_DIMENSIONS
         )
-        self._loaded_model: Any = None
+        self._loaded_model: "SentenceTransformer | None" = None
 
     @property
-    def _model(self) -> Any:
+    def _model(self) -> "SentenceTransformer":
         """Lazy-load the SentenceTransformer model on first access."""
         if self._loaded_model is None:
             if SentenceTransformer is None:

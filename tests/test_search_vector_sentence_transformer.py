@@ -69,7 +69,7 @@ def test_model_lazy_loaded_on_first_embedding_call() -> None:
 
 
 def test_get_embeddings_batch_calls_encode_once(backend_and_db) -> None:
-    backend, db_path, mock_model = backend_and_db
+    backend, _, mock_model = backend_and_db
     texts = ["first situation", "second situation", "third situation"]
     embeddings = backend._get_embeddings_batch(texts)
     mock_model.encode.assert_called_once()
@@ -80,7 +80,7 @@ def test_get_embeddings_batch_calls_encode_once(backend_and_db) -> None:
 
 
 def test_get_embedding_returns_list_of_floats(backend_and_db) -> None:
-    backend, db_path, mock_model = backend_and_db
+    backend, _, mock_model = backend_and_db
     embedding = backend._get_embedding("a situation")
     assert isinstance(embedding, list)
     assert all(isinstance(value, float) for value in embedding)
@@ -96,6 +96,7 @@ def test_create_database_creates_schema(backend_and_db) -> None:
     table_names = {row[0] for row in cursor.fetchall()}
     conn.close()
     assert "memories" in table_names
+    assert "vec_memories" in table_names
 
 
 def test_insert_and_search_round_trip(backend_and_db) -> None:
