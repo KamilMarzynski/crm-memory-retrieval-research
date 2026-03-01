@@ -42,6 +42,7 @@ THREE USAGE PATTERNS
 
 from memory_retrieval.experiments.batch_runner import (
     BatchFullPipelineConfig,
+    BatchOutcome,
     BatchSubrunConfig,
     run_subrun_batch,
 )
@@ -50,7 +51,7 @@ from memory_retrieval.experiments.runner import ExperimentConfig
 from memory_retrieval.infra.runs import PHASE2
 from memory_retrieval.memories.extractor import ExtractionConfig, SituationFormat
 from memory_retrieval.search.reranker import Reranker
-from memory_retrieval.search.vector import VectorBackend
+from memory_retrieval.search.vector import SentenceTransformerVectorBackend, VectorBackend
 
 RERANK_TEXT_STRATEGIES = {
     "situation_only": lambda c: c["situation"],
@@ -122,54 +123,63 @@ parent_run_ids = [
     "run_20260218_221228",
 ]
 
-subrun_config = BatchSubrunConfig(
-    phase=PHASE2,
-    parent_run_ids=parent_run_ids,
-    experiment_config=ExperimentConfig(
-        search_backend=VectorBackend(),
-        reranker=Reranker(model_name="tomaarsen/Qwen3-Reranker-0.6B-seq-cls"),
-        rerank_text_strategies=RERANK_TEXT_STRATEGIES,
-    ),
-    rebuild_db=False,  # True only if switching embedding model
-    description="Subrun batch - testing Qwen3-Reranker-0.6B",
-)
+PPLX_MODELS = [
+    "perplexity-ai/pplx-embed-v1-0.6B",
+    "perplexity-ai/pplx-embed-v1-4B",
+    "perplexity-ai/pplx-embed-context-v1-0.6B",
+    "perplexity-ai/pplx-embed-context-v1-4B",
+]
+
+pplx_subrun_configs = [
+    BatchSubrunConfig(
+        phase=PHASE2,
+        parent_run_ids=parent_run_ids,
+        experiment_config=ExperimentConfig(
+            search_backend=SentenceTransformerVectorBackend(model_name=model_name),
+            reranker=Reranker(),
+            rerank_text_strategies=RERANK_TEXT_STRATEGIES,
+        ),
+        rebuild_db=True,
+        description=f"Subrun batch — pplx embedding model: {model_name}",
+    )
+    for model_name in PPLX_MODELS
+]
 
 # ============================================================
 # RUN — uncomment whichever mode you want
 # ============================================================
 
 if __name__ == "__main__":
-    # --- Full pipeline batch ---
-    # outcome = run_full_pipeline_batch(full_pipeline_config)
+    all_outcomes: list[BatchOutcome] = []
 
-    # --- Subrun batch ---
-    outcome = run_subrun_batch(subrun_config)
+    for pplx_subrun_config in pplx_subrun_configs:
+        print(f"\n{'=' * 60}")
+        print(f"Starting batch for: {pplx_subrun_config.description}")
+        print(f"{'=' * 60}\n")
+        batch_outcome = run_subrun_batch(pplx_subrun_config)
+        all_outcomes.append(batch_outcome)
 
-    # Print summary
-    print(f"\nBatch complete: {outcome.batch_dir}")
-    print(f"Completed: {outcome.num_completed} / {len(outcome.outcomes)}")
-    print(f"Failed: {outcome.num_failed}")
-    print()
-    print("Completed run IDs:")
-    for single_run_outcome in outcome.outcomes:
-        if single_run_outcome.run_id and single_run_outcome.status == "completed":
-            f1_display = (
-                f"{single_run_outcome.optimal_f1:.4f}"
-                if single_run_outcome.optimal_f1 is not None
-                else "n/a"
-            )
-            print(
-                f"  [{single_run_outcome.run_index}] {single_run_outcome.run_id}  F1={f1_display}"
-            )
-    print()
-    print("To compare results, load into cross_run_comparison.ipynb:")
-    print(
-        "  run_ids = "
-        + repr(
-            [
-                single_run_outcome.run_id
-                for single_run_outcome in outcome.outcomes
-                if single_run_outcome.run_id and single_run_outcome.status == "completed"
-            ]
+        print(f"\nBatch complete: {batch_outcome.batch_dir}")
+        print(f"Completed: {batch_outcome.num_completed} / {len(batch_outcome.outcomes)}")
+        print(f"Failed: {batch_outcome.num_failed}")
+
+    print("\n\nAll batches complete. Summary:")
+    for batch_outcome, pplx_subrun_config in zip(all_outcomes, pplx_subrun_configs):
+        print(f"\n  Model: {pplx_subrun_config.description}")
+        print(f"  Batch dir: {batch_outcome.batch_dir}")
+        print(
+            f"  Completed: {batch_outcome.num_completed} / {len(batch_outcome.outcomes)}"
+            f"  Failed: {batch_outcome.num_failed}"
         )
-    )
+        print("  Subrun IDs:")
+        for single_run_outcome in batch_outcome.outcomes:
+            if single_run_outcome.run_id and single_run_outcome.status == "completed":
+                f1_display = (
+                    f"{single_run_outcome.optimal_f1:.4f}"
+                    if single_run_outcome.optimal_f1 is not None
+                    else "n/a"
+                )
+                print(
+                    f"    [{single_run_outcome.run_index}] {single_run_outcome.run_id}"
+                    f"  F1={f1_display}"
+                )
